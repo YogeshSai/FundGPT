@@ -1,7 +1,7 @@
 """
 app.py
 ------
-Streamlit frontend for FundGPT — an AI-powered Mutual Fund analytics chatbot.
+Streamlit frontend for FundFinder — an AI-powered Mutual Fund analytics chatbot.
 
 Responsive UI: a single, full-width nav list in the sidebar for desktop, plus
 an equivalent tap-friendly flow inline in the chat itself (toolbar button +
@@ -13,11 +13,12 @@ Run:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from finance_bot import FinanceBot, clean_subcat_label
 from llm_fallback import get_llm_fallback
 
-st.set_page_config(page_title="FundGPT — Mutual Fund Bot", page_icon="📈", layout="wide")
+st.set_page_config(page_title="FundFinder — Mutual Fund Bot", page_icon="📈", layout="wide")
 
 # ---------------------------------------------------------------------
 # Style — minimal palette, generous tap targets, responsive grid.
@@ -281,13 +282,31 @@ def queue_action(action: str) -> None:
     st.rerun()
 
 
+def scroll_to_bottom() -> None:
+    """Scroll the main chat panel to its bottom. Called at the end of
+    every run so new content -- a fresh assistant reply, or the guided
+    Asset Type / Sub Category buttons after clicking 'Browse by
+    category' -- is immediately visible instead of requiring a manual
+    scroll."""
+    components.html(
+        """
+        <script>
+            const doc = window.parent.document;
+            const main = doc.querySelector('section.main');
+            if (main) { main.scrollTop = main.scrollHeight; }
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ---------------------------------------------------------------------
 # Sidebar — desktop-friendly single-column category browser
 # ---------------------------------------------------------------------
 with st.sidebar:
     st.markdown(
         '<div class="ff-brand"><div class="ff-mark">FF</div>'
-        '<div class="ff-title">FundGPT</div></div>'
+        '<div class="ff-title">FundFinder</div></div>'
         '<div class="ff-sub">Indian Mutual Fund analytics</div>',
         unsafe_allow_html=True,
     )
@@ -355,7 +374,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------
 st.markdown(
     '<div class="ff-brand"><div class="ff-mark">FF</div>'
-    '<div class="ff-title">Ask FundGPT</div></div>'
+    '<div class="ff-title">Ask FundFinder</div></div>'
     '<div class="ff-sub">Top performing Mutual funds.</div>',
     unsafe_allow_html=True,
 )
@@ -492,3 +511,5 @@ with st.expander("Example queries"):
             ]
         )
     )
+
+scroll_to_bottom()
