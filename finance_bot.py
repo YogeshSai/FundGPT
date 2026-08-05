@@ -1,7 +1,7 @@
 """
 finance_bot.py
 --------------
-Core logic for FundFinder: an AI-powered mutual fund analytics chatbot.
+Core logic for FundGPT: an AI-powered mutual fund analytics chatbot.
 
 Responsibilities:
   1. Load & validate the fund dataset from the fixed local file
@@ -475,16 +475,18 @@ class FinanceBot:
     def _render_options_table(
         self, options: list[str], heading: str, clean: bool = False
     ) -> str:
-        """Chat-message text for a guided-flow prompt. The selectable
-        options themselves are NOT listed here -- they're rendered as
-        real tap buttons by the front end right below this message (see
-        `pending_options_payload`), so listing them again as a markdown
-        table would just duplicate the button panel. `options` and
-        `clean` are accepted for signature compatibility with callers
-        but no longer used to build a table."""
+        """Render a numbered options list as a single markdown table
+        (instead of a bracketed '[1] ... [2] ...' list). If `clean` is
+        True, each option's display text is passed through
+        `clean_subcat_label` first (used for Sub Category options)."""
         lines = [f"### {heading}\n"]
+        lines.append("| # | Option |")
+        lines.append("|---|---|")
+        for i, opt in enumerate(options, start=1):
+            label = clean_subcat_label(opt) if clean else opt
+            lines.append(f"| {i} | {label} |")
         lines.append(
-            "_Tap an option below, or reply with its number or name._"
+            "\n_Tap an option in the panel, or reply with its number or name._"
         )
         return "\n".join(lines)
 
