@@ -15,7 +15,7 @@ Run:
 import streamlit as st
 
 from finance_bot import FinanceBot, subcat_browse_label
-from llm_fallback import get_llm_fallback
+from llm_fallback import get_llm_fallback, get_fund_risk_summarizer
 
 st.set_page_config(page_title="Falakurra Fappu", page_icon="📈", layout="wide")
 
@@ -281,10 +281,10 @@ def load_bot() -> FinanceBot:
     return FinanceBot()
 
 
-def ask(prompt: str, llm_fallback) -> None:
+def ask(prompt: str, llm_fallback, fund_summarizer=None) -> None:
     """Push a user prompt through the bot and append both turns to chat history."""
     st.session_state.messages.append({"role": "user", "content": prompt})
-    answer = bot.respond(prompt, llm_fallback=llm_fallback)
+    answer = bot.respond(prompt, llm_fallback=llm_fallback, fund_summarizer=fund_summarizer)
     st.session_state.messages.append({"role": "assistant", "content": answer})
 
 
@@ -321,6 +321,19 @@ with st.sidebar:
     else:
         st.markdown('<div class="ff-pill off"><span class="dot"></span>General Q&A off</div>', unsafe_allow_html=True)
         st.caption("Set GROQ_API_KEY to enable free-form finance questions.")
+
+    # Same GROQ_API_KEY config as llm_fallback above, but a separate,
+    # narrowly-scoped call: given one fund's own metrics, it returns a
+    # plain-language read of its risk/reward profile plus an explicit
+    # "invest or not, and why" lean. Wired into every ask() call below so
+    # it's attached to fund-profile answers wherever they're triggered
+    # from (chat input, sidebar category buttons, chips, fund-name links).
+    fund_summarizer = get_fund_risk_summarizer()
+    if fund_summarizer:
+        st.markdown('<div class="ff-pill on"><span class="dot"></span>AI fund summary enabled</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="ff-pill off"><span class="dot"></span>AI fund summary off</div>', unsafe_allow_html=True)
+        st.caption("Set GROQ_API_KEY to enable the AI invest/avoid summary on fund profiles.")
 
     if st.button("Clear chat", use_container_width=True):
         bot.pending = None
@@ -408,7 +421,7 @@ if st.session_state.pending_action:
         bot.pending = None
         st.session_state.messages.append({"role": "assistant", "content": bot.start_asset_type_flow()})
     else:
-        ask(action, llm_fallback)
+        ask(action, llm_fallback, fund_summarizer)
 
 if st.session_state.pending_back:
     st.session_state.pending_back = False
@@ -421,7 +434,7 @@ if st.session_state.get("selected_subcat"):
     subcat_query = st.session_state.selected_subcat
     st.session_state.selected_subcat = None  # consume it so it only fires once
     bot.pending = None
-    ask(f"top 10 funds in {subcat_query}", llm_fallback)
+    ask(f"top 10 funds in {subcat_query}", llm_fallback, fund_summarizer)
 
 # If a fund name link was just clicked in a table (e.g. "?fund=<name>"),
 # treat it exactly like the user typing "tell me about <name>" and clear
@@ -430,7 +443,7 @@ if st.query_params.get("fund"):
     fund_query = st.query_params["fund"]
     st.query_params.clear()
     bot.pending = None
-    ask(f"tell me about {fund_query}", llm_fallback)
+    ask(f"tell me about {fund_query}", llm_fallback, fund_summarizer)
 
 # --- Chat history ---
 for msg in st.session_state.messages:
