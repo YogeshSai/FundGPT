@@ -991,12 +991,6 @@ class FinanceBot:
     # ------------------------------------------------------------------
     # Formatting: full fund profile -> markdown
     # ------------------------------------------------------------------
-    # Horizons shown on the profile page. Deliberately fewer than the full
-    # HORIZONS list (drops 1D/1W as too noisy for an investment read, and
-    # SI as usually redundant with 10Y) -- keeps the snapshot to the
-    # horizons that actually matter for a "should I invest" read.
-    _PROFILE_HORIZONS = ["1M", "6M", "1Y", "3Y", "5Y", "10Y"]
-
     def format_fund_profile(self, row: pd.Series, fund_summarizer=None) -> str:
         def fmt(v, is_percent=False):
             if pd.isna(v):
@@ -1009,63 +1003,63 @@ class FinanceBot:
 
         out = [f"## {row['Scheme Name']}\n"]
 
-        # Compact one-line header instead of a 6-row Basic Information
-        # table -- AMC / category / NAV is what a reader actually scans
-        # for; Scheme Code and Asset Class are dropped as noise, and ELSS
-        # only shown when it's actually relevant (True).
-        amc = row.get("AMC (Fund House)")
-        subcat = clean_subcat_label(str(row["Sub Category"])) if "Sub Category" in row.index and not pd.isna(row["Sub Category"]) else None
-        header_bits = [b for b in [amc, subcat] if b and not pd.isna(b)]
-        if header_bits:
-            out.append(" · ".join(str(b) for b in header_bits))
-        nav = row.get("Latest NAV")
-        nav_date = row.get("Latest NAV Date")
-        if not pd.isna(nav):
-            nav_line = f"**NAV:** ₹{fmt(nav)}"
-            if not pd.isna(nav_date):
-                nav_line += f" (as of {pd.to_datetime(nav_date).strftime('%d %b %Y')})"
-            out.append(nav_line)
-        if row.get("ELSS") is True:
-            out.append("_Tax-saver (ELSS) fund_")
+        # Basic Information -- every BASIC_COLS field (Scheme Code, AMC,
+        # Sub Category, Asset Class, ELSS, NAV + date), same as the
+        # original layout, just as a bullet list instead of a table: a
+        # 2-column Field/Value table still forces a fixed-width left
+        # column that can crowd a narrow phone screen, where a bullet
+        # list just wraps.
+        for c in BASIC_COLS:
+            if c == "Scheme Name" or c not in row.index:
+                continue
+            v = row[c]
+            if pd.isna(v):
+                continue
+            label = "Sub Category" if c == "Sub Category" else c
+            value = clean_subcat_label(str(v)) if c == "Sub Category" else fmt(v)
+            out.append(f"- **{label}:** {value}")
         out.append("")
 
-        # A 5-column markdown table (Horizon | Return | Volatility | Max
-        # Drawdown | Sharpe) forces horizontal scrolling on a phone-width
-        # chat pane -- tables render as fixed-width columns that don't
-        # reflow. A stacked line per horizon wraps naturally at any width
-        # and reads more like a sentence than a spreadsheet, so that's
-        # used here instead. Missing metrics (e.g. Sharpe on a <1Y
-        # horizon) are dropped from that horizon's line entirely rather
-        # than shown as a "—" placeholder -- one less thing to parse on a
-        # small screen.
-        lines = []
-        for horizon in self._PROFILE_HORIZONS:
-            cagr_col, abs_col = f"{horizon}_CAGR", f"{horizon}_AbsoluteReturn"
-            ret = row.get(cagr_col)
-            ret_is_cagr = not pd.isna(ret) if cagr_col in row.index else False
-            if not ret_is_cagr:
-                ret = row.get(abs_col)
-            vol = row.get(f"{horizon}_Volatility")
-            mdd = row.get(f"{horizon}_MaxDrawdown")
-            sharpe = row.get(f"{horizon}_Sharpe")
-            if pd.isna(ret) and pd.isna(vol) and pd.isna(mdd) and pd.isna(sharpe):
+        # Every horizon (1D through SI) and every metric -- same full
+        # data as the original, but each horizon is a tap-to-expand
+        # <details> section instead of a permanently-open table, so nine
+        # stacked tables don't turn into one long wall of scrolling on a
+        # phone. The <summary> line shows the headline return so a
+        # reader can scan all horizons at a glance and only expand the
+        # ones they want the full risk breakdown for. Relies on chat
+        # messages rendering with unsafe_allow_html=True (see app.py).
+        out.append("**Performance & Risk by Horizon**")
+        out.append("_Tap a period to see the full breakdown._")
+        out.append("")
+        for horizon in HORIZONS:
+            present = [
+                f"{horizon}_{s}" for s in METRIC_SUFFIXES
+                if f"{horizon}_{s}" in row.index and not pd.isna(row[f"{horizon}_{s}"])
+            ]
+            if not present:
                 continue
 
-            bits = []
-            if not pd.isna(ret):
-                bits.append(f"Return {fmt(ret, is_percent=True)}" + (" p.a." if ret_is_cagr else ""))
-            if not pd.isna(vol):
-                bits.append(f"Volatility {fmt(vol, is_percent=True)}")
-            if not pd.isna(mdd):
-                bits.append(f"Max DD {fmt(mdd, is_percent=True)}")
-            if not pd.isna(sharpe):
-                bits.append(f"Sharpe {fmt(sharpe)}")
-            lines.append(f"- **{horizon}** — " + " · ".join(bits))
+            cagr_col, abs_col = f"{horizon}_CAGR", f"{horizon}_AbsoluteReturn"
+            headline_is_cagr = cagr_col in row.index and not pd.isna(row.get(cagr_col))
+            headline_val = row.get(cagr_col) if headline_is_cagr else row.get(abs_col)
+            headline = (
+                f"Return {fmt(headline_val, is_percent=True)}" + (" p.a." if headline_is_cagr else "")
+                if headline_val is not None and not pd.isna(headline_val) else "—"
+            )
 
-        if lines:
-            out.append("**Performance Snapshot**")
-            out.extend(lines)
-            out.append("_Return is annualised (p.a.) for 1Y+, absolute for shorter periods._")
+            out.append("<details>")
+            out.append(f"<summary><strong>{horizon}</strong> — {headline}</summary>")
+            out.append("")
+            for c in present:
+                suffix = c.split("_", 1)[1]
+                label = FRIENDLY_LABELS.get(suffix, suffix)
+                is_pct = suffix in (
+                    "AbsoluteReturn", "CAGR", "Volatility", "MaxDrawdown",
+                    "DownsideDev", "VaR95", "RollMean", "RollMin", "RollMax",
+                )
+                out.append(f"- {label}: {fmt(row[c], is_percent=is_pct)}")
+            out.append("")
+            out.append("</details>")
             out.append("")
 
         composite = row.get("Composite_Score")
