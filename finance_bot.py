@@ -11,10 +11,17 @@ Responsibilities:
      an alternate file or sheet name.
   2. Answer "top performing funds in <Sub Category>" queries, matching the
      user's category text against the dataset's real Sub Category values by
-     highest similarity score (no need to type it exactly).
+     highest similarity score (no need to type it exactly), and -- if an
+     AMC / fund-house name is present in the query (e.g. "HDFC Small cap
+     funds") -- filtering results down to just that AMC.
   3. Answer "tell me about <Scheme Name>" queries with the full metric sheet.
-  4. Lightweight intent detection (regex/keyword based -- no LLM required
-     for the two core features above).
+  4. Lightweight intent + entity extraction: regex for coarse intent
+     shape ("top N ... in ...") combined with local, offline NLP
+     (nlp_utils.py: spaCy tokenization + a dataset-driven AMC matcher,
+     and rapidfuzz for fuzzy string scoring) for pulling the AMC name and
+     the true category/fund text out of free-form phrasing. No LLM call
+     is required for these two core features, and nothing in this path
+     makes a network request.
   5. A guided "Asset Type -> Sub Category" button flow: when the bot can't
      confidently match a category from free text (or the user just wants to
      browse), it first offers Asset Type options, then -- once picked --
@@ -40,11 +47,28 @@ would otherwise survive as two separate entries everywhere -- the
 sidebar list, the guided-flow buttons, and top-N results. See
 `_canonicalize_subcat`, which is applied once at load time so every
 consumer downstream sees a single merged value instead.
+
+NLP layer
+---------
+See nlp_utils.py for the local, offline NLP helpers this file uses:
+  - AMCMatcher: recognizes an AMC / fund-house name anywhere in a query
+    (built from the dataset's own "AMC (Fund House)" column -- never a
+    hardcoded list) and strips it out, so "HDFC Small cap funds" splits
+    cleanly into amc="HDFC" and rest="Small cap funds" instead of the
+    AMC name silently diluting -- or being dropped from -- the category
+    match.
+  - best_fuzzy_match / ranked_fuzzy_matches: rapidfuzz-based fuzzy
+    scoring (replaces the previous difflib.SequenceMatcher calls).
+    rapidfuzz's token_sort_ratio / token_set_ratio compare bags of
+    words rather than raw character sequences, so word reordering and
+    a few extra/missing words -- exactly what stripping (or failing to
+    strip) an AMC prefix introduces -- no longer tank the score.
+This is a fully local/offline NLP layer: spaCy + rapidfuzz only, no
+external API calls, no added latency or cost per query.
 """
 
 from __future__ import annotations
 
-import difflib
 import html
 import os
 import re
@@ -52,6 +76,16 @@ from dataclasses import dataclass, field
 from urllib.parse import quote
 
 import pandas as pd
+
+from rapidfuzz import fuzz
+
+from nlp_utils import (
+    AMCMatcher,
+    best_fuzzy_match,
+    extract_number_word,
+    fuzzy_ratio,
+    ranked_fuzzy_matches,
+)
 
 # ----------------------------------------------------------------------
 # Fixed dataset location -- this is the single, static source of data.
@@ -483,21 +517,22 @@ class FinanceBot:
             self._asset_types = ["All Funds"]
             self._asset_type_to_subcats = {"All Funds": self._sub_categories}
 
-        # Known AMC / fund-house "first words" (e.g. "hdfc" from "HDFC
-        # Mutual Fund", "sbi" from "SBI Funds Management", "icici" from
-        # "ICICI Prudential", ...), built from the dataset itself so it's
-        # never a guessed/hardcoded list. Used by _extract_amc_and_rest()
-        # to recognize and strip an AMC name off the front of a category
-        # query -- e.g. "HDFC Small cap funds" -- before fuzzy-matching
-        # the Sub Category, so "HDFC" doesn't dilute that match (or, if
-        # matching ever fell through to fund-name search, get picked up
-        # as random noise and match some unrelated fund by coincidence).
-        self._amc_first_words: set[str] = set()
+        # Local NLP: AMC / fund-house matcher, built from the dataset's own
+        # "AMC (Fund House)" column values -- never a hardcoded list -- so
+        # a query like "HDFC Small cap funds" can have "HDFC" recognized
+        # and split off from the category text instead of silently
+        # diluting (or being dropped from) the fuzzy category match. See
+        # nlp_utils.AMCMatcher and _extract_amc_and_rest() below.
         if "AMC (Fund House)" in df.columns:
-            for amc in df["AMC (Fund House)"].dropna().astype(str).unique():
-                first = amc.strip().split(" ", 1)[0].lower()
-                if len(first) >= 3:  # skip very short tokens -- too prone to false positives
-                    self._amc_first_words.add(first)
+            amc_values = df["AMC (Fund House)"].dropna().astype(str).unique().tolist()
+        else:
+            amc_values = []
+        self._amc_matcher = AMCMatcher(amc_values)
+
+        # Kept for backward compatibility with any external code that
+        # imported this attribute directly; AMCMatcher now does the actual
+        # extraction work.
+        self._amc_first_words: set[str] = set(self._amc_matcher._brand_words)
 
     @property
     def sub_categories(self) -> list[str]:
@@ -515,11 +550,41 @@ class FinanceBot:
         return len(self.df)
 
     # ------------------------------------------------------------------
+    # AMC extraction -- pulls a recognized AMC / fund-house name out of
+    # free text and returns (amc_or_None, remaining_text). Delegates to
+    # nlp_utils.AMCMatcher, which is seeded from the dataset itself.
+    # ------------------------------------------------------------------
+    def _extract_amc_and_rest(self, query: str) -> tuple[str | None, str]:
+        return self._amc_matcher.extract(query)
+
+    def _funds_for_amc(self, subset: pd.DataFrame, amc_text: str) -> pd.DataFrame:
+        """Filter `subset` down to rows whose AMC (Fund House) best matches
+        `amc_text` (fuzzy, since a query's "HDFC" needs to match a full
+        column value like "HDFC Mutual Fund"). Returns the filtered rows,
+        or an empty frame if no AMC in the subset scores above threshold."""
+        amc_col = "AMC (Fund House)"
+        if amc_col not in subset.columns or subset.empty:
+            return subset.iloc[0:0]
+        amc_values = subset[amc_col].dropna().astype(str).unique().tolist()
+        # token_set_ratio (not the default token_sort_ratio) here: the
+        # query is a short brand word ("HDFC") being matched against a
+        # much longer full legal name ("HDFC Mutual Fund"). token_set_ratio
+        # scores a query whose words are a subset of the candidate's words
+        # highly regardless of the length difference; token_sort_ratio
+        # penalizes that length mismatch and would wrongly score this low
+        # (verified: 'HDFC' vs 'HDFC Mutual Fund' -> 40% on token_sort_ratio
+        # but 100% on token_set_ratio).
+        best, score = best_fuzzy_match(amc_text, amc_values, scorer=fuzz.token_set_ratio)
+        if best is None or score < 0.6:
+            return subset.iloc[0:0]
+        return subset[subset[amc_col] == best]
+
+    # ------------------------------------------------------------------
     # Sub-category matching -- fuzzy, highest-score based (no exact text
     # required). Matching runs against the *cleaned* display label (the
     # "Open/Close Ended Schemes(...)" wrapper stripped out), not the raw
     # dataset string. Comparing against the raw value let its wrapper text
-    # dilute difflib's length-sensitive ratio -- a long, correct raw value
+    # dilute the old character-sequence ratio -- a long, correct raw value
     # like "Open Ended Schemes(Equity Scheme - Small Cap Fund)" could
     # score WORSE against a short query than an unrelated but
     # coincidentally short raw label with no scheme-type prefix (e.g.
@@ -527,6 +592,11 @@ class FinanceBot:
     # string-length mismatch, not actual relevance. The raw Sub Category
     # value is still what gets returned/used for filtering -- only the
     # comparison text changes.
+    #
+    # Scoring uses rapidfuzz's token_sort_ratio (nlp_utils.fuzzy_ratio) --
+    # a bag-of-words comparison, unlike difflib's raw character-sequence
+    # ratio -- so a query with extra words still scores well against the
+    # right label as long as the important words match.
     # Returns the best matching (raw) Sub Category and its score.
     # ------------------------------------------------------------------
     def best_sub_category_match(
@@ -546,7 +616,7 @@ class FinanceBot:
             if label_l == q:
                 return sc, 1.0
 
-            score = difflib.SequenceMatcher(None, q, label_l).ratio()
+            score = fuzzy_ratio(q, label_l)
             # Boost substring matches (e.g. "large cap" inside "Large Cap
             # Fund", or "small cap fund" -- after pluralization is
             # normalized above -- inside "Small Cap Fund").
@@ -569,7 +639,7 @@ class FinanceBot:
         scored = []
         for sc in self._sub_categories:
             label_l = _normalize_category_text(clean_subcat_label(sc))
-            score = difflib.SequenceMatcher(None, q, label_l).ratio()
+            score = fuzzy_ratio(q, label_l)
             if q in label_l or label_l.replace(" fund", "").strip() in q:
                 score = max(score, 0.85)
             scored.append((sc, score))
@@ -593,9 +663,9 @@ class FinanceBot:
             contains = contains.assign(_len=contains["Scheme Name"].str.len()).sort_values("_len")
             return contains.iloc[0]
 
-        close = difflib.get_close_matches(query, self._scheme_names, n=1, cutoff=0.45)
-        if close:
-            return self.df[self.df["Scheme Name"] == close[0]].iloc[0]
+        best, score = best_fuzzy_match(query, self._scheme_names)
+        if best is not None and score >= 0.45:
+            return self.df[self.df["Scheme Name"] == best].iloc[0]
 
         raise FundNotFoundError(f"No fund matching '{query}' found in the dataset.")
 
@@ -605,8 +675,9 @@ class FinanceBot:
         contains = self.df[self.df["Scheme Name"].str.lower().str.contains(re.escape(q), na=False)]
         if len(contains):
             return contains.head(n)
-        close = difflib.get_close_matches(query, self._scheme_names, n=n, cutoff=0.4)
-        return self.df[self.df["Scheme Name"].isin(close)]
+        matches = ranked_fuzzy_matches(query, self._scheme_names, limit=n, score_cutoff=0.4)
+        names = [name for name, _score in matches]
+        return self.df[self.df["Scheme Name"].isin(names)]
 
     def match_funds_ranked(self, query: str, n: int = 6) -> pd.DataFrame:
         """Rank every fund in the dataset by similarity to a free-text
@@ -615,27 +686,17 @@ class FinanceBot:
         from -- instead of silently auto-selecting whichever single match
         scores highest, which can guess wrong when several funds share
         very similar names (different AMCs' "... ELSS Tax Saver Fund",
-        Direct vs Regular plan, Growth vs IDCW, etc.)."""
-        q = (query or "").strip().lower()
+        Direct vs Regular plan, Growth vs IDCW, etc.).
+
+        Uses rapidfuzz's token_set_ratio, which treats the query and each
+        scheme name as bags of words -- so a short query like "hdfc flexi
+        cap" scores well against the much longer "HDFC Flexi Cap Fund -
+        Direct Plan - Growth" without needing a manual substring-boost
+        special case."""
+        q = (query or "").strip()
         if not q:
             return self.df.iloc[0:0]
 
-        names_l = self.df["Scheme Name"].astype(str).str.lower()
-
-        def _score(name_l: str) -> float:
-            if name_l == q:
-                return 1.0
-            s = difflib.SequenceMatcher(None, q, name_l).ratio()
-            if q in name_l:
-                # A clean substring hit is a strong signal even when the
-                # full scheme name is much longer than the query (e.g.
-                # "hdfc flexi cap" inside "HDFC Flexi Cap Fund - Direct
-                # Plan - Growth"), where the raw ratio would score low.
-                s = max(s, 0.75)
-            return s
-
-        scores = names_l.apply(_score)
-        ranked = self.df.assign(_match_score=scores)
         # A higher bar than the Sub Category matcher's (0.35): fund names
         # share a lot of boilerplate ("Fund", "Direct Plan", "Growth"), so
         # a loose cutoff pulls in unrelated AMCs' funds just because they're
@@ -643,22 +704,45 @@ class FinanceBot:
         # otherwise also surface every other house's Flexi Cap fund). 0.55
         # keeps genuine near-duplicates (same fund, different plan/option)
         # while dropping same-category noise.
-        ranked = ranked[ranked["_match_score"] >= 0.55]
-        ranked = ranked.sort_values("_match_score", ascending=False)
-        return ranked.head(n).drop(columns="_match_score")
+        matches = ranked_fuzzy_matches(q, self._scheme_names, limit=n, score_cutoff=0.55)
+        if not matches:
+            return self.df.iloc[0:0]
+        ordered_names = [name for name, _score in matches]
+        # Preserve rank order (rapidfuzz already sorts best-first, but
+        # DataFrame.isin() doesn't preserve it) and dedupe if the same
+        # scheme name appears more than once in the raw data.
+        rows = self.df[self.df["Scheme Name"].isin(ordered_names)]
+        rows = rows.drop_duplicates(subset="Scheme Name")
+        rank = {name: i for i, name in enumerate(ordered_names)}
+        rows = rows.assign(_rank=rows["Scheme Name"].map(rank)).sort_values("_rank")
+        return rows.drop(columns="_rank").head(n)
 
     # ------------------------------------------------------------------
     # Top-N funds in a sub-category
     # ------------------------------------------------------------------
-    def top_funds(self, sub_category: str, n: int = 10, sort_by: str = "Peer_Rank") -> pd.DataFrame:
+    def top_funds(
+        self, sub_category: str, n: int = 10, sort_by: str = "Peer_Rank",
+        amc: str | None = None,
+    ) -> pd.DataFrame:
         subset = self.df[self.df["Sub Category"] == sub_category].copy()
         if subset.empty:
             return subset
+
+        # Filter to a specific AMC / fund house before dedup/ranking, if
+        # one was recognized in the query (e.g. "HDFC Small cap funds").
+        if amc:
+            subset = self._funds_for_amc(subset, amc)
+            if subset.empty:
+                return subset
+
         subset = dedup_funds(subset)
 
         # Only one fund per AMC in the displayed set -- if two funds from the
         # same fund house both qualify, keep just the better-ranked one
-        # rather than showing the AMC twice.
+        # rather than showing the AMC twice. Skipped when the caller has
+        # already filtered to a single AMC (amc is set), since collapsing
+        # to "one per AMC" there would incorrectly cut an AMC's results
+        # down to a single fund.
         #
         # This IS a backfill: the table always fills to n funds (subject to
         # there being n distinct-AMC funds in the category at all) by
@@ -668,7 +752,7 @@ class FinanceBot:
         # column in the rendered table (see format_top_funds /
         # TOP_N_METRIC_SPECS) -- it's used here purely as the backend
         # ordering, ascending (best rank first).
-        amc_col = "AMC (Fund House)" if "AMC (Fund House)" in subset.columns else None
+        amc_col = "AMC (Fund House)" if ("AMC (Fund House)" in subset.columns and not amc) else None
 
         if "Peer_Rank" in subset.columns:
             subset["Peer_Rank"] = pd.to_numeric(subset["Peer_Rank"], errors="coerce")
@@ -700,14 +784,21 @@ class FinanceBot:
                 resolved.append((fallback, label))
         return resolved
 
-    def format_top_funds(self, sub_category: str, n: int = 10) -> str:
-        subset = self.top_funds(sub_category, n=n)
+    def format_top_funds(self, sub_category: str, n: int = 10, amc: str | None = None) -> str:
+        subset = self.top_funds(sub_category, n=n, amc=amc)
+        cat_label = clean_subcat_label(sub_category)
         if subset.empty:
-            return f"I couldn't find any funds in **{clean_subcat_label(sub_category)}**."
+            if amc:
+                return f"I couldn't find any **{amc}** funds in **{cat_label}**."
+            return f"I couldn't find any funds in **{cat_label}**."
 
         metric_cols = self._resolve_top_n_metric_cols(subset)
         headers = ["Scheme Name"] + [label for _, label in metric_cols]
-        lines = [f"### Top performing funds in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
+        heading = f"### Top performing funds in **{cat_label}**"
+        if amc:
+            heading += f" — **{amc}**"
+        heading += f" ({len(subset)} funds)\n"
+        lines = [heading]
         header = "| # | " + " | ".join(headers) + " |"
         sep = "|---|" + "|".join(["---"] * len(headers)) + "|"
         lines += [header, sep]
@@ -899,7 +990,8 @@ class FinanceBot:
         return None
 
     # ------------------------------------------------------------------
-    # Intent detection (rule based, no LLM required)
+    # Intent detection (rule based, no LLM required) + local NLP entity
+    # extraction (AMC name, category text, spelled-out counts).
     # ------------------------------------------------------------------
     TOP_PATTERNS = [
         r"\btop\s*(\d+)?\s*(?:performing|rated|funds?)\b.*?\bin\b\s*(.+)",
@@ -909,7 +1001,14 @@ class FinanceBot:
 
     def detect_intent(self, query: str) -> tuple[str, dict]:
         q = query.strip()
-        ql = q.lower()
+
+        # Strip a recognized AMC name off the query FIRST, before any
+        # pattern matching or fuzzy category matching runs, so:
+        #  (a) the AMC never dilutes/distracts the category fuzzy match, and
+        #  (b) it's captured explicitly (params["amc"]) so top_funds() can
+        #      actually filter by it, instead of being silently discarded.
+        amc, q_wo_amc = self._extract_amc_and_rest(q)
+        ql = q_wo_amc.lower()
 
         for pat in self.TOP_PATTERNS:
             m = re.search(pat, ql)
@@ -922,9 +1021,15 @@ class FinanceBot:
                         n = int(g)
                     elif g:
                         cat_text = g
+                if cat_text is None:
+                    # Digit count regex found nothing -- check for a
+                    # spelled-out count word ("top five funds") instead.
+                    word_n = extract_number_word(ql)
+                    if word_n:
+                        n = word_n
                 if cat_text:
                     cat_text = re.sub(r"\bfunds?\b", "", cat_text).strip(" ?.!")
-                    return "top_funds", {"category_text": cat_text, "n": n}
+                    return "top_funds", {"category_text": cat_text, "n": n, "amc": amc}
 
         if any(kw in ql for kw in ["tell me about", "info on", "information about",
                                     "details of", "details on", "about the fund",
@@ -933,12 +1038,17 @@ class FinanceBot:
                              "details of", "details on", "about the fund", "how is", "how's"]:
                 if trigger in ql:
                     idx = ql.index(trigger) + len(trigger)
-                    return "fund_info", {"fund_text": q[idx:].strip(" ?.!")}
+                    # Fund lookups use the ORIGINAL (AMC-inclusive) text --
+                    # the AMC name is usually part of the scheme name
+                    # itself (e.g. "HDFC Flexi Cap Fund"), so it should NOT
+                    # be stripped here the way it is for category queries.
+                    idx_full = q.lower().index(trigger) + len(trigger)
+                    return "fund_info", {"fund_text": q[idx_full:].strip(" ?.!")}
 
         # Explicit request to browse categories -> kick off the guided flow.
         if any(kw in ql for kw in ["show categories", "browse funds", "show funds",
                                     "which categories", "list categories",
-                                    "top funds", "show me funds"]) and not self.match_sub_categories(q):
+                                    "top funds", "show me funds"]) and not self.match_sub_categories(q_wo_amc):
             return "browse", {}
 
         # Generic definitional/explainer questions ("what is...", "how does...",
@@ -951,11 +1061,13 @@ class FinanceBot:
         ))
 
         if not generic_question:
-            best_sc, score = self.best_sub_category_match(q)
+            best_sc, score = self.best_sub_category_match(q_wo_amc)
             if best_sc and score >= SUBCAT_MATCH_THRESHOLD:
-                return "top_funds", {"category_text": q, "n": 10}
+                return "top_funds", {"category_text": q_wo_amc, "n": 10, "amc": amc}
 
         if not generic_question:
+            # Fund-name lookups use the ORIGINAL text (AMC is typically
+            # part of the scheme name, e.g. "HDFC Flexi Cap Fund").
             candidate = self.match_funds_multi(q, n=1)
             if not candidate.empty:
                 return "fund_info", {"fund_text": q}
@@ -982,7 +1094,8 @@ class FinanceBot:
             if not best_sc or score < SUBCAT_MATCH_THRESHOLD:
                 # Couldn't confidently match free text -> guided flow.
                 return self.start_asset_type_flow()
-            return self.format_top_funds(best_sc, n=params.get("n", 10))
+            amc = params.get("amc")
+            return self.format_top_funds(best_sc, n=params.get("n", 10), amc=amc)
 
         if intent == "fund_info":
             fund_text = params["fund_text"]
