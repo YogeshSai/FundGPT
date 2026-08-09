@@ -11,7 +11,7 @@ Asset Type → Sub Category browsing flow.
 | `app.py` | Streamlit UI (chat, sidebar, guided buttons) |
 | `finance_bot.py` | Core logic — data loading, matching, ranking, formatting |
 | `llm_fallback.py` | Optional Groq-powered fallback for free-form finance Q&A |
-| `MF_Risk_Metrics_1.xlsx` | The fund dataset (sheet: `Risk Metrics`) — must stay in the repo root, alongside `finance_bot.py` |
+| `MF_Risk_Metrics.xlsx` | The fund dataset (sheet: `Risk Metrics`) — must stay in the repo root, alongside `finance_bot.py` |
 | `requirements.txt` | Python dependencies |
 
 ## Run locally
@@ -50,17 +50,6 @@ Get a free key at https://console.groq.com, then either:
 
 > The dataset file is ~8 MB and is committed directly to the repo — well
 > under GitHub's 100 MB per-file limit, so no Git LFS is needed.
-
-## Pushing this repo to GitHub
-
-```bash
-git remote add origin https://github.com/<your-username>/<repo-name>.git
-git branch -M main
-git push -u origin main
-```
-
-(Create the empty repo on GitHub first, without a README/license, so
-there's nothing to conflict with the initial push.)
 
 ## Notes
 
