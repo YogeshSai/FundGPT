@@ -12,6 +12,8 @@ Run:
     streamlit run app.py
 """
 
+import time
+
 import streamlit as st
 
 from finance_bot import FinanceBot, subcat_browse_label
@@ -374,11 +376,12 @@ div[data-baseweb="textarea"] textarea,
 }
 [data-testid="stChatInput"] button svg { fill: #171717 !important; color: #171717 !important; }
 
-/* ---- First-load splash screen: full-viewport overlay shown only while
-   the fund dataset is loading for the very first time this session (see
-   the st.session_state guard below) -- covers the sidebar/chat while
-   FinanceBot() parses the workbook so the user sees an intentional
-   loading moment instead of a half-drawn page. ---- */
+/* ---- Loading splash overlay: full-viewport, shown at the top of every
+   script run (see the unconditional st.empty() block below) and cleared
+   right after load_bot() resolves -- so every browser refresh (and, as a
+   side effect, every other rerun too, since Streamlit can't distinguish
+   the two from pure Python) gets the same intentional loading moment
+   instead of a half-drawn page. ---- */
 .ff-loading-screen {
     position: fixed;
     inset: 0;
@@ -411,20 +414,21 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # <img> straight at the underlying .gif asset).
 _LOADING_GIF_URL = "https://media1.tenor.com/m/Dpc_QB5RBW0AAAAC/uppi-kannada.gif"
 
-# Shown once per browser session -- st.cache_resource already makes
-# load_bot() itself fast after the very first load process-wide, but a
-# NEW session still deserves to see the loading moment rather than the
-# splash silently never appearing again after the server's first user.
-_loading_placeholder = None
-if "app_ready" not in st.session_state:
-    _loading_placeholder = st.empty()
-    _loading_placeholder.markdown(
-        f'<div class="ff-loading-screen">'
-        f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}" alt="Loading" />'
-        f'<div class="ff-loading-text">Loading fund data…</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+# Shown at the top of every single script run -- NOT gated behind a
+# "seen it once this session" flag. st.cache_resource already makes
+# load_bot() fast after the very first process-wide load, so this splash
+# is a brief, intentional beat on every refresh rather than a real wait.
+# The cache-busting query param forces the browser to treat the <img> as
+# a brand-new element each run, so the gif actually restarts playing from
+# frame one instead of a stale frame just sitting there.
+_loading_placeholder = st.empty()
+_loading_placeholder.markdown(
+    f'<div class="ff-loading-screen">'
+    f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}?t={int(time.time() * 1000)}" alt="Loading" />'
+    f'<div class="ff-loading-text">Loading fund data…</div>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource(show_spinner="Loading fund dataset...")
@@ -466,9 +470,8 @@ with st.sidebar:
         st.error(f"Failed to load dataset: {e}")
         st.stop()
 
-    if _loading_placeholder is not None:
-        _loading_placeholder.empty()
-        st.session_state.app_ready = True
+    # Dataset (cached) is ready -- dismiss the splash for this run.
+    _loading_placeholder.empty()
 
     st.caption(f"{bot.fund_count():,} funds loaded")
 
