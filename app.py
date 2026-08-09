@@ -378,38 +378,59 @@ div[data-baseweb="textarea"] textarea,
    the fund dataset is loading for the very first time this session (see
    the st.session_state guard below) -- covers the sidebar/chat while
    FinanceBot() parses the workbook so the user sees an intentional
-   loading moment instead of a half-drawn page. ---- */
+   loading moment instead of a half-drawn page.
+
+   The GIF is rendered as a fixed, full-bleed background layer (cover-
+   fit, so it fills the viewport regardless of aspect ratio) with a
+   heavy dark scrim + blur/brightness filter over it -- "very dull",
+   not the main focus -- so the "Loading fund data..." text stays the
+   readable, primary element on top of it. ---- */
 .ff-loading-screen {
     position: fixed;
     inset: 0;
     z-index: 99999;
     background: var(--ff-bg);
+    overflow: hidden;
+}
+.ff-loading-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: brightness(0.28) saturate(0.7) blur(1px);
+    opacity: 0.9;
+}
+.ff-loading-scrim {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(23,23,23,0.55), rgba(23,23,23,0.75) 60%, var(--ff-bg) 100%);
+}
+.ff-loading-content {
+    position: relative;
+    z-index: 1;
+    height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 1rem;
 }
-.ff-loading-gif {
-    width: 220px;
-    max-width: 60vw;
-    border-radius: 12px;
-    border: 1px solid var(--ff-border);
-}
 .ff-loading-text {
-    color: var(--ff-text-muted) !important;
-    font-size: 0.9rem;
+    color: var(--ff-text) !important;
+    font-size: 0.95rem;
     font-weight: 500;
     letter-spacing: 0.02em;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.6);
 }
 
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# Direct-media Tenor link (the page URL redirects/embeds, so we point the
-# <img> straight at the underlying .gif asset).
-_LOADING_GIF_URL = "https://media1.tenor.com/m/Dpc_QB5RBW0AAAAC/uppi-kannada.gif"
+# Direct-media link (the makeagif.com page itself just embeds a player --
+# this is the actual .gif asset behind it).
+_LOADING_GIF_URL = "https://i.makeagif.com/media/5-01-2018/-F0Ju_.gif"
 
 # Shown once per browser session -- st.cache_resource already makes
 # load_bot() itself fast after the very first load process-wide, but a
@@ -420,8 +441,11 @@ if "app_ready" not in st.session_state:
     _loading_placeholder = st.empty()
     _loading_placeholder.markdown(
         f'<div class="ff-loading-screen">'
-        f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}" alt="Loading" />'
+        f'<img class="ff-loading-bg" src="{_LOADING_GIF_URL}" alt="" />'
+        f'<div class="ff-loading-scrim"></div>'
+        f'<div class="ff-loading-content">'
         f'<div class="ff-loading-text">Loading fund data…</div>'
+        f'</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
