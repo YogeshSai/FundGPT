@@ -55,19 +55,9 @@ html, body { color-scheme: dark !important; }
 }
 
 .main .block-container {
-    /* Previously capped at 780px and auto-centered, which is why the
-       user bubble -- flush to the *right edge of that 780px column* --
-       still landed visually near the middle of the browser window on
-       any screen wider than ~780px+sidebar. Removing the cap lets the
-       block-container fill the actual main content pane (the area next
-       to the sidebar), so margin-left:auto on the bubble now hugs the
-       real right edge of the screen instead of the edge of a narrow
-       centered column. */
-    max-width: 100%;
+    max-width: 780px;
     padding-top: 1.4rem;
     padding-bottom: 7.5rem;
-    padding-left: 1.6rem;
-    padding-right: 1.6rem;
 }
 
 @media (max-width: 680px) {
@@ -194,10 +184,7 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
    to fill the row, and width:fit-content + margin-left:auto then let it
    shrink to the text and hug the right edge. The bubble itself uses a
    muted neutral fill a shade lighter than the page background, with the
-   normal light text colour, rather than a loud accent fill. Text inside
-   the bubble is centered while the bubble itself still hugs the right
-   edge of the row -- i.e. the bubble ("object") sits to the right, and
-   the text inside it is centered rather than left-aligned. */
+   normal light text colour, rather than a loud accent fill. */
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
     flex: none !important;
     background: var(--ff-surface-2) !important;
@@ -210,7 +197,7 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] * {
     color: var(--ff-text) !important;
-    text-align: center;
+    text-align: left;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] p {
     margin: 0;
@@ -218,11 +205,7 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
     background: transparent !important;
     color: var(--ff-text-muted) !important;
-    padding: 0;
-    /* Independent of the now-unconstrained block-container: keep bot
-       replies at a comfortable reading width instead of stretching
-       edge-to-edge on wide screens. */
-    max-width: 780px;
+    padding: 0; max-width: 100%;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] p,
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] li {
