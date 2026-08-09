@@ -415,20 +415,27 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 _LOADING_GIF_URL = "https://media1.tenor.com/m/Dpc_QB5RBW0AAAAC/uppi-kannada.gif"
 
 # Shown at the top of every single script run -- NOT gated behind a
-# "seen it once this session" flag. st.cache_resource already makes
-# load_bot() fast after the very first process-wide load, so this splash
-# is a brief, intentional beat on every refresh rather than a real wait.
-# The cache-busting query param forces the browser to treat the <img> as
-# a brand-new element each run, so the gif actually restarts playing from
-# frame one instead of a stale frame just sitting there.
+# "seen it once this session" flag. The cache-busting query param forces
+# the browser to treat the <img> as a brand-new element each run, so the
+# gif actually restarts playing from frame one instead of a stale frame
+# just sitting there.
+_splash_start = time.time()
 _loading_placeholder = st.empty()
 _loading_placeholder.markdown(
     f'<div class="ff-loading-screen">'
-    f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}?t={int(time.time() * 1000)}" alt="Loading" />'
+    f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}?t={int(_splash_start * 1000)}" alt="Loading" />'
     f'<div class="ff-loading-text">Loading fund data…</div>'
     f'</div>',
     unsafe_allow_html=True,
 )
+
+# Minimum time the splash stays on screen. st.cache_resource makes
+# load_bot() return almost instantly after the very first process-wide
+# load, so without this floor the placeholder gets created and wiped in
+# the same script run -- often faster than the browser gets a chance to
+# paint it, which is why it can look like the gif "never shows" even
+# though the code path is running every time.
+_MIN_SPLASH_SECONDS = 1.2
 
 
 @st.cache_resource(show_spinner="Loading fund dataset...")
@@ -470,7 +477,13 @@ with st.sidebar:
         st.error(f"Failed to load dataset: {e}")
         st.stop()
 
-    # Dataset (cached) is ready -- dismiss the splash for this run.
+    # Dataset is ready -- hold the splash open for the remainder of the
+    # minimum duration (usually the full 1.2s, since the cached load_bot()
+    # call above returns almost instantly) so it's actually perceptible,
+    # then dismiss it for this run.
+    _elapsed = time.time() - _splash_start
+    if _elapsed < _MIN_SPLASH_SECONDS:
+        time.sleep(_MIN_SPLASH_SECONDS - _elapsed)
     _loading_placeholder.empty()
 
     st.caption(f"{bot.fund_count():,} funds loaded")
