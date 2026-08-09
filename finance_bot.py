@@ -566,6 +566,23 @@ class FinanceBot:
         if amc_col not in subset.columns or subset.empty:
             return subset.iloc[0:0]
         amc_values = subset[amc_col].dropna().astype(str).unique().tolist()
+        # rapidfuzz's scorers are CASE-SENSITIVE ('Quant' vs 'quant' scores
+        # far lower than a same-case comparison would suggest). The dataset
+        # has at least one AMC name stored fully lowercase ("quant Mutual
+        # Fund", vs. e.g. "Quantum Mutual Fund" or "HDFC Mutual Fund"), so
+        # matching the raw (title-cased, as typed/extracted) query text
+        # against raw AMC values let a query for "Quant" score HIGHER
+        # against the unrelated "Quantum Mutual Fund" (case matches) than
+        # against the actually-intended "quant Mutual Fund" (case
+        # mismatch) -- silently returning the wrong AMC's funds, or an
+        # empty result if the wrong AMC's rows don't overlap the requested
+        # category. Lowercase both sides purely for scoring; the ORIGINAL
+        # (correctly-cased) amc_values entries are still what's returned
+        # and used to filter, via the lower->original lookup map.
+        lower_to_original: dict[str, str] = {}
+        for v in amc_values:
+            lower_to_original.setdefault(v.lower(), v)
+        amc_values_lower = list(lower_to_original.keys())
         # token_set_ratio (not the default token_sort_ratio) here: the
         # query is a short brand word ("HDFC") being matched against a
         # much longer full legal name ("HDFC Mutual Fund"). token_set_ratio
@@ -574,9 +591,12 @@ class FinanceBot:
         # penalizes that length mismatch and would wrongly score this low
         # (verified: 'HDFC' vs 'HDFC Mutual Fund' -> 40% on token_sort_ratio
         # but 100% on token_set_ratio).
-        best, score = best_fuzzy_match(amc_text, amc_values, scorer=fuzz.token_set_ratio)
-        if best is None or score < 0.6:
+        best_lower, score = best_fuzzy_match(
+            amc_text.lower(), amc_values_lower, scorer=fuzz.token_set_ratio
+        )
+        if best_lower is None or score < 0.6:
             return subset.iloc[0:0]
+        best = lower_to_original[best_lower]
         return subset[subset[amc_col] == best]
 
     # ------------------------------------------------------------------
@@ -599,6 +619,32 @@ class FinanceBot:
     # right label as long as the important words match.
     # Returns the best matching (raw) Sub Category and its score.
     # ------------------------------------------------------------------
+    # Sub Categories wrapped as "Close Ended Schemes(...)" are legacy /
+    # matured buckets that are no longer open for fresh investment (e.g.
+    # decades-old fixed-tenure ELSS or Growth/Income plans). A query like
+    # "ELSS" almost always means the actively-investable, open-ended ELSS
+    # Tax Saver funds -- but that category's cleaned label is "Equity
+    # Scheme - ELSS", NOT a bare "ELSS", so a plain "ELSS" query only
+    # exact-string-matches the closed-ended bucket ("Close Ended
+    # Schemes(ELSS)" cleans to just "ELSS"). Left unhandled, that exact
+    # match (score 1.0) beat the open-ended category's substring-boosted
+    # score (0.85) purely by string-matching luck -- so "Quant ELSS"
+    # resolved to the closed-ended ELSS bucket, which doesn't contain
+    # quant Mutual Fund's (or almost any AMC's) ELSS fund at all, and the
+    # bot reported no results even though the fund exists.
+    #
+    # Fix: exclude closed-ended sub-categories from the default match
+    # pool -- unless the query itself explicitly asks for "close(d)
+    # ended" funds, or excluding them would leave nothing to match at all
+    # (some categories genuinely only exist as closed-ended).
+    _CLOSE_ENDED_MARKER = "close ended schemes"
+
+    def _default_subcat_pool(self, query_norm: str, pool: list[str]) -> list[str]:
+        if "close" in query_norm and "end" in query_norm:
+            return pool
+        open_only = [sc for sc in pool if self._CLOSE_ENDED_MARKER not in sc.lower()]
+        return open_only or pool
+
     def best_sub_category_match(
         self, query: str, candidates: list[str] | None = None
     ) -> tuple[str | None, float]:
@@ -609,12 +655,22 @@ class FinanceBot:
         pool = candidates if candidates is not None else self._sub_categories
         if not pool:
             return None, 0.0
+        pool = self._default_subcat_pool(q, pool)
 
         best_sc, best_score = None, 0.0
+        exact_matches: list[str] = []
         for sc in pool:
             label_l = _normalize_category_text(clean_subcat_label(sc))
             if label_l == q:
-                return sc, 1.0
+                # Don't return on the FIRST exact match -- several raw Sub
+                # Category values can clean/normalize down to the same
+                # label (e.g. "Open Ended Schemes(Growth)" and, before the
+                # closed-ended filter above, "Close Ended Schemes(Growth)"
+                # both clean to just "Growth"). Collect every exact match
+                # and break ties below instead of taking whichever happens
+                # to be first.
+                exact_matches.append(sc)
+                continue
 
             score = fuzzy_ratio(q, label_l)
             # Boost substring matches (e.g. "large cap" inside "Large Cap
@@ -626,6 +682,17 @@ class FinanceBot:
             if score > best_score:
                 best_sc, best_score = sc, score
 
+        if exact_matches:
+            # Same tie-break heuristic as _build_asset_type_subcat_map():
+            # prefer whichever raw value is backed by the most funds in
+            # the dataset, so a big category always wins over a small one
+            # with the same cleaned label.
+            best_exact = max(
+                exact_matches,
+                key=lambda sc: int((self.df["Sub Category"] == sc).sum()),
+            )
+            return best_exact, 1.0
+
         return best_sc, best_score
 
     def match_sub_categories(self, query: str, limit: int = 3) -> list[str]:
@@ -636,8 +703,9 @@ class FinanceBot:
         q = _normalize_category_text(query)
         if not q:
             return []
+        pool = self._default_subcat_pool(q, self._sub_categories)
         scored = []
-        for sc in self._sub_categories:
+        for sc in pool:
             label_l = _normalize_category_text(clean_subcat_label(sc))
             score = fuzzy_ratio(q, label_l)
             if q in label_l or label_l.replace(" fund", "").strip() in q:
