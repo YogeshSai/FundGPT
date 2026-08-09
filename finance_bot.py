@@ -959,34 +959,61 @@ class FinanceBot:
             return f"I couldn't find any funds in **{cat_label}**."
 
         metric_cols = self._resolve_top_n_metric_cols(subset)
-        headers = ["Scheme Name"] + [label for _, label in metric_cols]
         heading = f"### Top performing funds in **{cat_label}**"
         if amc:
             heading += f" — **{amc}**"
         heading += f" ({len(subset)} funds)\n"
-        lines = [heading]
-        header = "| # | " + " | ".join(headers) + " |"
-        sep = "|---|" + "|".join(["---"] * len(headers)) + "|"
-        lines += [header, sep]
+
+        # Rendered as a stack of cards instead of a wide markdown table --
+        # a 6+ column table only fits a phone screen by squeezing text or
+        # forcing horizontal scroll, neither of which is a good mobile
+        # experience. Each fund becomes one card: rank + name up top, then
+        # its return figures as small label/value chips that wrap onto as
+        # many rows as the screen needs, so nothing is ever clipped or
+        # scrolled sideways. Colour-coding the sign (green/red) also makes
+        # the numbers scannable at a glance instead of requiring a careful
+        # read of the '-' sign. Relies on the .ff-fundlist/.ff-fundcard/
+        # .ff-metric CSS in app.py and on chat messages rendering with
+        # unsafe_allow_html=True (see app.py).
+        cards = ['<div class="ff-fundlist">']
         for i, (_, row) in enumerate(subset.iterrows(), start=1):
-            vals = [_fund_link(row["Scheme Name"])]
-            for col, _label in metric_cols:
+            name_html = _fund_link(row["Scheme Name"])
+            chips = []
+            for col, label in metric_cols:
+                period = label.split(" ", 1)[0]  # "1D Obs. Return" -> "1D"
                 v = row[col]
+                sign_cls = ""
                 if pd.isna(v):
-                    v = "—"
+                    disp = "—"
                 elif isinstance(v, float):
-                    if col in PERCENT_COLS:
-                        v = f"{v * 100:.2f}%"
-                    else:
-                        v = f"{v:.2f}"
-                vals.append(str(v))
-            lines.append(f"| {i} | " + " | ".join(vals) + " |")
-        lines.append(
+                    sign_cls = "pos" if v > 0 else ("neg" if v < 0 else "")
+                    disp = f"{v * 100:.2f}%" if col in PERCENT_COLS else f"{v:.2f}"
+                else:
+                    disp = html.escape(str(v))
+                chips.append(
+                    '<div class="ff-metric">'
+                    f'<span class="ff-metric-label">{html.escape(period)}</span>'
+                    f'<span class="ff-metric-value {sign_cls}">{disp}</span>'
+                    "</div>"
+                )
+            cards.append(
+                '<div class="ff-fundcard">'
+                '<div class="ff-fundcard-head">'
+                f'<span class="ff-rank">{i}</span>'
+                f'<span class="ff-fundname">{name_html}</span>'
+                "</div>"
+                f'<div class="ff-metric-grid">{"".join(chips)}</div>'
+                "</div>"
+            )
+        cards.append("</div>")
+
+        out = [heading, "".join(cards)]
+        out.append(
             "\n_Ranked by Composite Score (blends 3Y return, risk-adjusted "
             "return, drawdown & volatility percentile vs. category peers). "
-            "Ask 'tell me about <fund name>' for the full metric sheet on any of these._"
+            "Tap a fund name for the full metric sheet._"
         )
-        return "\n".join(lines)
+        return "\n".join(out)
 
     # ------------------------------------------------------------------
     # Formatting: full fund profile -> markdown
@@ -1029,8 +1056,9 @@ class FinanceBot:
         # ones they want the full risk breakdown for. Relies on chat
         # messages rendering with unsafe_allow_html=True (see app.py).
         out.append("**Performance & Risk by Horizon**")
-        out.append("_Tap a period to see the full breakdown._")
+        out.append('<div class="ff-hint">Tap a period to see the full breakdown.</div>')
         out.append("")
+        out.append('<div class="ff-horizons">')
         for horizon in HORIZONS:
             present = [
                 f"{horizon}_{s}" for s in METRIC_SUFFIXES
@@ -1042,13 +1070,31 @@ class FinanceBot:
             cagr_col, abs_col = f"{horizon}_CAGR", f"{horizon}_AbsoluteReturn"
             headline_is_cagr = cagr_col in row.index and not pd.isna(row.get(cagr_col))
             headline_val = row.get(cagr_col) if headline_is_cagr else row.get(abs_col)
+            has_headline = headline_val is not None and not pd.isna(headline_val)
             headline = (
-                f"Return {fmt(headline_val, is_percent=True)}" + (" p.a." if headline_is_cagr else "")
-                if headline_val is not None and not pd.isna(headline_val) else "—"
+                f"{fmt(headline_val, is_percent=True)}" + (" p.a." if headline_is_cagr else "")
+                if has_headline else "—"
             )
+            sign_cls = ""
+            if has_headline:
+                sign_cls = "pos" if headline_val > 0 else ("neg" if headline_val < 0 else "")
 
-            out.append("<details>")
-            out.append(f"<summary><strong>{horizon}</strong> — {headline}</summary>")
+            # Custom-styled <details>/<summary> instead of the bare browser
+            # default (a tiny triangle glyph that's easy to miss and gives
+            # no hover/tap feedback) -- the .ff-horizon CSS in app.py turns
+            # this into a card with a clear "Return" label, a colour-coded
+            # value, and a chevron that visibly rotates on open, so it
+            # reads as an obviously tappable row instead of plain text.
+            out.append('<details class="ff-horizon">')
+            out.append(
+                "<summary>"
+                f'<span class="ff-h-period">{horizon}</span>'
+                '<span class="ff-h-return-wrap">'
+                '<span class="ff-h-return-label">Return</span>'
+                f'<span class="ff-h-return {sign_cls}">{headline}</span>'
+                "</span>"
+                "</summary>"
+            )
             out.append("")
             for c in present:
                 suffix = c.split("_", 1)[1]
@@ -1060,7 +1106,8 @@ class FinanceBot:
                 out.append(f"- {label}: {fmt(row[c], is_percent=is_pct)}")
             out.append("")
             out.append("</details>")
-            out.append("")
+        out.append("</div>")
+        out.append("")
 
         composite = row.get("Composite_Score")
         peer_rank = row.get("Peer_Rank")
