@@ -46,7 +46,7 @@ import pandas as pd
 # a different sheet, or an uploaded workbook.
 # ----------------------------------------------------------------------
 
-DATA_FILENAME = "MF_Risk_Metrics_1.xlsx"
+DATA_FILENAME = "MF_Risk_Metrics.xlsx"
 SHEET_NAME = "Risk Metrics"
 
 # Backward-compatible aliases (older app.py versions import these names).
