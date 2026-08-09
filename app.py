@@ -374,9 +374,57 @@ div[data-baseweb="textarea"] textarea,
 }
 [data-testid="stChatInput"] button svg { fill: #171717 !important; color: #171717 !important; }
 
+/* ---- First-load splash screen: full-viewport overlay shown only while
+   the fund dataset is loading for the very first time this session (see
+   the st.session_state guard below) -- covers the sidebar/chat while
+   FinanceBot() parses the workbook so the user sees an intentional
+   loading moment instead of a half-drawn page. ---- */
+.ff-loading-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: var(--ff-bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+.ff-loading-gif {
+    width: 220px;
+    max-width: 60vw;
+    border-radius: 12px;
+    border: 1px solid var(--ff-border);
+}
+.ff-loading-text {
+    color: var(--ff-text-muted) !important;
+    font-size: 0.9rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+# Direct-media Tenor link (the page URL redirects/embeds, so we point the
+# <img> straight at the underlying .gif asset).
+_LOADING_GIF_URL = "https://media1.tenor.com/m/Dpc_QB5RBW0AAAAC/uppi-kannada.gif"
+
+# Shown once per browser session -- st.cache_resource already makes
+# load_bot() itself fast after the very first load process-wide, but a
+# NEW session still deserves to see the loading moment rather than the
+# splash silently never appearing again after the server's first user.
+_loading_placeholder = None
+if "app_ready" not in st.session_state:
+    _loading_placeholder = st.empty()
+    _loading_placeholder.markdown(
+        f'<div class="ff-loading-screen">'
+        f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}" alt="Loading" />'
+        f'<div class="ff-loading-text">Loading fund data…</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_resource(show_spinner="Loading fund dataset...")
@@ -417,6 +465,10 @@ with st.sidebar:
     except Exception as e:  # noqa: BLE001
         st.error(f"Failed to load dataset: {e}")
         st.stop()
+
+    if _loading_placeholder is not None:
+        _loading_placeholder.empty()
+        st.session_state.app_ready = True
 
     st.caption(f"{bot.fund_count():,} funds loaded")
 
