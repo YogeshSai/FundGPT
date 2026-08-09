@@ -100,28 +100,31 @@ PEER_PCTILE_COLS = [
 ]
 SCORE_COLS = ["Composite_Score", "Peer_Rank"]
 
-TOP_N_TABLE_COLS = [
-    "Scheme Name", "1Y_CAGR", "3Y_CAGR", "5Y_CAGR", "Peer_Rank",
+# ----------------------------------------------------------------------
+# Top-N table columns -- Observed (absolute, non-annualised) Return at
+# each horizon, NOT CAGR, and no Peer_Rank column shown (Peer_Rank is
+# still what the table is ORDERED by -- see top_funds() -- it's just not
+# rendered as a column anymore).
+#
+# Each entry is (source_col, fallback_col_or_None, display_label). The
+# fallback is only used if the primary "Obs return" column isn't present
+# in the loaded sheet for that horizon, so the table still degrades
+# gracefully instead of silently dropping a horizon.
+# ----------------------------------------------------------------------
+TOP_N_METRIC_SPECS = [
+    ("1D_AbsoluteReturn", None, "1D Obs. Return"),
+    ("6M_AbsoluteReturn", None, "6M Obs. Return"),
+    ("1Y_AbsoluteReturn", "1Y_CAGR", "1Y Obs. Return"),
+    ("3Y_AbsoluteReturn", "3Y_CAGR", "3Y Obs. Return"),
+    ("5Y_AbsoluteReturn", "5Y_CAGR", "5Y Obs. Return"),
 ]
-
-# Columns shown in the chat's Top-N table. AMC, 3Y Sharpe, and Composite
-# Score are deliberately left out here -- they're already shown when the
-# user opens a specific fund's full profile, so repeating them in the
-# summary table is redundant.
-TOP_N_DISPLAY_COLS = ["Scheme Name", "1Y_CAGR", "3Y_CAGR", "5Y_CAGR", "Peer_Rank"]
-
-# Underscore-free display headers for the Top-N table.
-TOP_N_COL_LABELS = {
-    "Scheme Name": "Scheme Name",
-    "1Y_CAGR": "1Y CAGR",
-    "3Y_CAGR": "3Y CAGR",
-    "5Y_CAGR": "5Y CAGR",
-    "Peer_Rank": "Peer Rank",
-}
 
 # These columns are stored as fractions (0.04 == 4%) and are rendered with
 # a trailing '%' in the Top-N table.
-PERCENT_COLS = {"1Y_CAGR", "3Y_CAGR", "5Y_CAGR"}
+PERCENT_COLS = {
+    "1D_AbsoluteReturn", "6M_AbsoluteReturn", "1Y_AbsoluteReturn",
+    "3Y_AbsoluteReturn", "5Y_AbsoluteReturn", "1Y_CAGR", "3Y_CAGR", "5Y_CAGR",
+}
 
 FRIENDLY_LABELS = {
     "AbsoluteReturn": "Absolute Return",
@@ -561,6 +564,45 @@ class FinanceBot:
         close = difflib.get_close_matches(query, self._scheme_names, n=n, cutoff=0.4)
         return self.df[self.df["Scheme Name"].isin(close)]
 
+    def match_funds_ranked(self, query: str, n: int = 6) -> pd.DataFrame:
+        """Rank every fund in the dataset by similarity to a free-text
+        search and return up to n rows, best match first. Used so a fund
+        search always surfaces every close candidate for the user to pick
+        from -- instead of silently auto-selecting whichever single match
+        scores highest, which can guess wrong when several funds share
+        very similar names (different AMCs' "... ELSS Tax Saver Fund",
+        Direct vs Regular plan, Growth vs IDCW, etc.)."""
+        q = (query or "").strip().lower()
+        if not q:
+            return self.df.iloc[0:0]
+
+        names_l = self.df["Scheme Name"].astype(str).str.lower()
+
+        def _score(name_l: str) -> float:
+            if name_l == q:
+                return 1.0
+            s = difflib.SequenceMatcher(None, q, name_l).ratio()
+            if q in name_l:
+                # A clean substring hit is a strong signal even when the
+                # full scheme name is much longer than the query (e.g.
+                # "hdfc flexi cap" inside "HDFC Flexi Cap Fund - Direct
+                # Plan - Growth"), where the raw ratio would score low.
+                s = max(s, 0.75)
+            return s
+
+        scores = names_l.apply(_score)
+        ranked = self.df.assign(_match_score=scores)
+        # A higher bar than the Sub Category matcher's (0.35): fund names
+        # share a lot of boilerplate ("Fund", "Direct Plan", "Growth"), so
+        # a loose cutoff pulls in unrelated AMCs' funds just because they're
+        # in the same category (e.g. searching "SBI Flexi Cap Fund" would
+        # otherwise also surface every other house's Flexi Cap fund). 0.55
+        # keeps genuine near-duplicates (same fund, different plan/option)
+        # while dropping same-category noise.
+        ranked = ranked[ranked["_match_score"] >= 0.55]
+        ranked = ranked.sort_values("_match_score", ascending=False)
+        return ranked.head(n).drop(columns="_match_score")
+
     # ------------------------------------------------------------------
     # Top-N funds in a sub-category
     # ------------------------------------------------------------------
@@ -571,24 +613,29 @@ class FinanceBot:
         subset = dedup_funds(subset)
 
         # Only one fund per AMC in the displayed set -- if two funds from the
-        # same fund house both land inside the peer-rank-<=n pool, keep just
-        # the better-ranked one rather than showing the AMC twice. This is
-        # NOT a backfill: if dropping same-AMC duplicates leaves fewer than
-        # n rows, that's the final (shorter) result -- we don't reach past
-        # rank n to top the count back up.
+        # same fund house both qualify, keep just the better-ranked one
+        # rather than showing the AMC twice.
+        #
+        # This IS a backfill: the table always fills to n funds (subject to
+        # there being n distinct-AMC funds in the category at all) by
+        # walking down the ascending Peer_Rank / Composite_Score order past
+        # rank n if dropping same-AMC and same-underlying-fund duplicates
+        # left the top-n band short. Peer_Rank itself is not shown as a
+        # column in the rendered table (see format_top_funds /
+        # TOP_N_METRIC_SPECS) -- it's used here purely as the backend
+        # ordering, ascending (best rank first).
         amc_col = "AMC (Fund House)" if "AMC (Fund House)" in subset.columns else None
 
         if "Peer_Rank" in subset.columns:
-            subset["Peer_Rank"]=pd.to_numeric(subset["Peer_Rank"],errors="coerce")
-            subset=subset.dropna(subset=["Peer_Rank"])
-            subset=subset[subset["Peer_Rank"]<=n]
-            subset=subset.sort_values(["Peer_Rank","Composite_Score"],ascending=[True,False])
+            subset["Peer_Rank"] = pd.to_numeric(subset["Peer_Rank"], errors="coerce")
+            subset = subset.dropna(subset=["Peer_Rank"])
+            subset = subset.sort_values(["Peer_Rank", "Composite_Score"], ascending=[True, False])
             if amc_col:
                 subset = subset.drop_duplicates(subset=amc_col, keep="first")
-            return subset
+            return subset.head(n)
         if sort_by not in subset.columns:
-            sort_by="Composite_Score"
-        subset = subset.sort_values(sort_by,ascending=False)
+            sort_by = "Composite_Score"
+        subset = subset.sort_values(sort_by, ascending=False)
         if amc_col:
             subset = subset.drop_duplicates(subset=amc_col, keep="first")
         return subset.head(n)
@@ -596,24 +643,38 @@ class FinanceBot:
     # ------------------------------------------------------------------
     # Formatting: top-N table -> markdown
     # ------------------------------------------------------------------
+    def _resolve_top_n_metric_cols(self, subset: pd.DataFrame) -> list[tuple[str, str]]:
+        """For each entry in TOP_N_METRIC_SPECS, pick whichever of
+        (primary, fallback) column actually exists in this dataset and
+        pair it with its display label. Horizons with neither column
+        present are skipped entirely rather than rendered blank."""
+        resolved = []
+        for primary, fallback, label in TOP_N_METRIC_SPECS:
+            if primary in subset.columns:
+                resolved.append((primary, label))
+            elif fallback and fallback in subset.columns:
+                resolved.append((fallback, label))
+        return resolved
+
     def format_top_funds(self, sub_category: str, n: int = 10) -> str:
         subset = self.top_funds(sub_category, n=n)
         if subset.empty:
             return f"I couldn't find any funds in **{clean_subcat_label(sub_category)}**."
 
-        cols = [c for c in TOP_N_TABLE_COLS if c in subset.columns]
-        lines = [f"### Top {n} Performing funds in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
-        header = "| # | " + " | ".join(cols) + " |"
-        sep = "|---|" + "|".join(["---"] * len(cols)) + "|"
+        metric_cols = self._resolve_top_n_metric_cols(subset)
+        headers = ["Scheme Name"] + [label for _, label in metric_cols]
+        lines = [f"### Top {n} funds in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
+        header = "| # | " + " | ".join(headers) + " |"
+        sep = "|---|" + "|".join(["---"] * len(headers)) + "|"
         lines += [header, sep]
         for i, (_, row) in enumerate(subset.iterrows(), start=1):
-            vals = []
-            for c in cols:
-                v = row[c]
-                if c == "Scheme Name":
-                    v = _fund_link(v)
+            vals = [_fund_link(row["Scheme Name"])]
+            for col, _label in metric_cols:
+                v = row[col]
+                if pd.isna(v):
+                    v = "—"
                 elif isinstance(v, float):
-                    if c in PERCENT_COLS:
+                    if col in PERCENT_COLS:
                         v = f"{v * 100:.2f}%"
                     else:
                         v = f"{v:.2f}"
@@ -775,6 +836,20 @@ class FinanceBot:
             self.pending = None
             return self.format_top_funds(choice, n=10)
 
+        if stage == "await_fund_choice":
+            options = self.pending["options"]
+            choice = self._resolve_choice(query, options)
+            if choice is None:
+                return (
+                    "I didn't quite catch that. " +
+                    self._render_prompt("Please pick a fund")
+                )
+            self.pending = None
+            match = self.df[self.df["Scheme Name"] == choice]
+            if match.empty:
+                return f"I couldn't find '{choice}' in the dataset."
+            return self.format_fund_profile(match.iloc[0])
+
         # Unknown stage -- reset defensively.
         self.pending = None
         return None
@@ -866,19 +941,24 @@ class FinanceBot:
             return self.format_top_funds(best_sc, n=params.get("n", 10))
 
         if intent == "fund_info":
-            try:
-                row = self.match_fund(params["fund_text"])
-                return self.format_fund_profile(row)
-            except FundNotFoundError:
-                candidates = self.match_funds_multi(params["fund_text"], n=5)
-                if not candidates.empty:
-                    names = "\n".join(
-                        f"- {_fund_link(n)}" for n in candidates["Scheme Name"]
-                    )
-                    return f"I couldn't find an exact match. Did you mean:\n\n{names}"
-                return (
-                    f"I couldn't find a fund matching '{params['fund_text']}' in the dataset."
-                )
+            fund_text = params["fund_text"]
+            candidates = self.match_funds_ranked(fund_text, n=6)
+            if candidates.empty:
+                return f"I couldn't find a fund matching '{fund_text}' in the dataset."
+            if len(candidates) == 1:
+                # Only one close match -- nothing ambiguous to choose
+                # between, so show its profile directly.
+                return self.format_fund_profile(candidates.iloc[0])
+            # Multiple close matches (different AMCs' similarly-named
+            # funds, Direct vs Regular plan, Growth vs IDCW, ...) -- let
+            # the user pick rather than silently guessing for them. Same
+            # tappable-options mechanism as the Asset Type / Sub Category
+            # guided flow (see pending_options_payload() / app.py).
+            self.pending = {
+                "stage": "await_fund_choice",
+                "options": candidates["Scheme Name"].tolist(),
+            }
+            return self._render_prompt(f"A few funds match \"{fund_text}\" — which one?")
 
         # Unknown intent -> optional LLM fallback (Groq) for general finance Q&A
         if llm_fallback is not None:
