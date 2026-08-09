@@ -176,21 +176,27 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
     justify-content: flex-end;
 }
-/* User's own messages: a filled, rounded "bubble" (rather than plain
-   right-aligned text) so the user's input is visually set apart from
-   the assistant's replies. Filled in the app's accent colour, with dark
-   text for contrast against it. */
+/* User's own messages: a rounded bubble that hugs its content and sits
+   flush right (Claude-style) -- NOT a full-width pill. Streamlit gives
+   stChatMessageContent "flex: 1 1 auto" by default (so long assistant
+   replies can wrap across the row), which is exactly why a short user
+   message was stretching edge-to-edge -- "flex: none" stops it growing
+   to fill the row, and width:fit-content + margin-left:auto then let it
+   shrink to the text and hug the right edge. The bubble itself uses a
+   muted neutral fill a shade lighter than the page background, with the
+   normal light text colour, rather than a loud accent fill. */
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
-    background: var(--ff-accent) !important;
-    text-align: left;
-    color: #171717 !important;
-    max-width: 80%;
-    padding: 0.55rem 0.9rem !important;
-    border-radius: 16px !important;
-    display: inline-block;
+    flex: none !important;
+    background: var(--ff-surface-2) !important;
+    color: var(--ff-text) !important;
+    max-width: 80% !important;
+    width: fit-content !important;
+    margin-left: auto !important;
+    padding: 0.6rem 1rem !important;
+    border-radius: 18px !important;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] * {
-    color: #171717 !important;
+    color: var(--ff-text) !important;
     text-align: left;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] p {
