@@ -479,7 +479,12 @@ _SUMMARY_PCT_SUFFIXES = {
     "AbsoluteReturn", "CAGR", "Volatility", "MaxDrawdown",
     "DownsideDev", "VaR95", "RollMean", "RollMin", "RollMax",
 }
-_SUMMARY_HORIZONS = ["1Y", "3Y", "5Y"]
+# AI verdict is scoped to 3-year metrics only -- the fund profile page
+# still shows 1Y/3Y/5Y for reference, but the summary/verdict call gets
+# just the 3Y horizon (return/CAGR, volatility, drawdown, risk-adjusted
+# ratios) plus the already-3Y-based peer percentile ranks and Composite
+# Score, so the model can't lean on a strong/weak 1Y or 5Y number.
+_SUMMARY_HORIZONS = ["3Y"]
 _SUMMARY_SUFFIXES = ["CAGR", "Volatility", "MaxDrawdown", "Sharpe", "Sortino", "Calmar"]
 
 
@@ -500,7 +505,7 @@ def _fund_metrics_text(row: pd.Series) -> str:
             else:
                 parts.append(f"{suffix}={v:.2f}")
         if parts:
-            lines.append(f"{horizon}: " + ", ".join(parts))
+            lines.append("Past 3 years: " + ", ".join(parts))
 
     pctile_present = [c for c in PEER_PCTILE_COLS if c in row.index and not pd.isna(row[c])]
     if pctile_present:
