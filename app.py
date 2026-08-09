@@ -373,7 +373,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------
 st.markdown(
     '<div class="ff-brand"><div class="ff-mark">FF</div>'
-    '<div class="ff-title">Ask FundGPT</div></div>'
+    '<div class="ff-title">Ask I say, Ask me </div></div>'
     '<div class="ff-sub">Top performing Mutual funds.</div>',
     unsafe_allow_html=True,
 )
