@@ -302,8 +302,8 @@ def queue_action(action: str) -> None:
 with st.sidebar:
     st.markdown(
         '<div class="ff-brand"><div class="ff-mark">FF</div>'
-        '<div class="ff-title">Mee fund selection baga amateurish ga undhi</div></div>'
-        '<div class="ff-sub">Nanu adugu nenu chebtha - MF Details</div>',
+        '<div class="ff-title">Nellore Pedda Reddy ki teliyani funds ah?</div></div>'
+        '<div class="ff-sub">Indian Mutual Fund analytics</div>',
         unsafe_allow_html=True,
     )
 
@@ -432,21 +432,6 @@ if st.query_params.get("fund"):
     bot.pending = None
     ask(f"tell me about {fund_query}", llm_fallback)
 
-# --- Toolbar: always-visible, works without ever opening the sidebar. ---
-st.markdown('<div class="ff-toolbar">', unsafe_allow_html=True)
-tb1, tb2 = st.columns(2)
-with tb1:
-    if st.button("Browse by category", use_container_width=True):
-        queue_action("__browse__")
-with tb2:
-    if st.button("Clear chat", key="clear_main", use_container_width=True):
-        bot.pending = None
-        st.session_state.messages = []
-        st.session_state.selected_asset_type = None
-        st.session_state.selected_subcat = None
-        st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
-
 # --- Chat history ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -487,6 +472,22 @@ elif len(st.session_state.messages) <= 1:
             if st.button(q, key=f"chip_{q}", use_container_width=True):
                 queue_action(q)
     st.markdown('</div>', unsafe_allow_html=True)
+
+# --- Toolbar: pinned right above the input box so both are reachable
+#     from the same spot, without ever needing to open the sidebar. ---
+st.markdown('<div class="ff-toolbar">', unsafe_allow_html=True)
+tb1, tb2 = st.columns(2)
+with tb1:
+    if st.button("Browse by category", use_container_width=True):
+        queue_action("__browse__")
+with tb2:
+    if st.button("Clear chat", key="clear_main", use_container_width=True):
+        bot.pending = None
+        st.session_state.messages = []
+        st.session_state.selected_asset_type = None
+        st.session_state.selected_subcat = None
+        st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 
 # --- Free-form input, always available at the bottom. Routed through the
 #     same queue_action() + rerun() pattern as every other entry point
