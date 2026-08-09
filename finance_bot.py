@@ -110,6 +110,24 @@ def _data_path() -> str:
     return os.path.join(here, DATA_FILENAME)
 
 
+# A handful of cells in the source spreadsheet have UTF-8 text (curly
+# apostrophes, en-dashes) that got saved through Latin-1/cp1252 at some
+# point, so they show up as mojibake -- e.g. "Childrenâ€™s Fund" instead
+# of "Children's Fund", or "â€"" instead of an en-dash in a couple of
+# Scheme Names. Repaired once here at load time (see load_data() below)
+# so every downstream table, link, and AI-summary input is clean, rather
+# than patching each display function separately.
+def _fix_mojibake(s):
+    if not isinstance(s, str) or "â" not in s:
+        return s
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        # Doesn't round-trip cleanly -- leave it as-is rather than risk
+        # mangling a string that just happens to contain "â".
+        return s
+
+
 # ----------------------------------------------------------------------
 # Column groupings used for pretty-printing a fund's full profile
 # ----------------------------------------------------------------------
@@ -553,6 +571,19 @@ class FinanceBot:
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Dataset is missing required columns: {missing}")
+
+        # Repair mojibake baked into the source cells (see _fix_mojibake)
+        # before anything else touches the text -- whitespace-trim,
+        # canonicalization, and every downstream table/link/AI-summary
+        # input should all see the corrected text.
+        #
+        # NOTE: pandas 3.x defaults text columns to its own "string" dtype
+        # rather than "object" -- checking `dtype == object` here silently
+        # skipped every column and let the mojibake straight through, so
+        # this uses is_string_dtype() to catch both.
+        for col in df.columns:
+            if pd.api.types.is_string_dtype(df[col]):
+                df[col] = df[col].map(_fix_mojibake)
 
         # Strip stray leading/trailing whitespace from the text fields the
         # guided browse flow groups on. Untrimmed whitespace (e.g. a sheet
