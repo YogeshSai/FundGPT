@@ -57,7 +57,7 @@ html, body { color-scheme: dark !important; }
 .main .block-container {
     max-width: 780px;
     padding-top: 1.4rem;
-    padding-bottom: 7.5rem;
+    padding-bottom: 11.5rem;
 }
 
 @media (max-width: 680px) {
@@ -139,7 +139,20 @@ div[data-testid="stButton"] button[kind="primary"] {
 }
 div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important; }
 
-/* Toolbar */
+/* Toolbar -- fixed directly above the chat-input bar so "Browse by
+   category" / "Clear chat" read as attached to the search box rather
+   than floating somewhere in the message thread. Same horizontal bounds
+   as the chat column (min(780px, 94vw), centered) so its edges line up
+   with the input box beneath it. */
+.ff-toolbar {
+    position: fixed;
+    bottom: 5.7rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(780px, 94vw);
+    z-index: 999;
+}
+.ff-toolbar div[data-testid="stHorizontalBlock"] { gap: 0.6rem; }
 .ff-toolbar div[data-testid="stButton"] button { font-weight: 500; }
 
 /* Suggestion chips */
@@ -256,19 +269,6 @@ div[data-baseweb="textarea"] textarea,
 }
 [data-testid="stChatInput"] button svg { fill: #171717 !important; color: #171717 !important; }
 
-/* ---- Expander (Example queries) ---- */
-[data-testid="stExpander"] {
-    background: var(--ff-surface) !important;
-    border: 1px solid var(--ff-border) !important;
-    border-radius: var(--ff-radius) !important;
-}
-[data-testid="stExpander"] summary, [data-testid="stExpander"] p, [data-testid="stExpander"] li {
-    color: var(--ff-text) !important;
-}
-[data-testid="stExpander"] code {
-    background: var(--ff-surface-2) !important; color: var(--ff-accent) !important;
-    border-radius: 6px; padding: 0.1rem 0.35rem;
-}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
@@ -500,15 +500,3 @@ st.markdown('</div>', unsafe_allow_html=True)
 #     until some unrelated rerun happened to catch up. ---
 if prompt := st.chat_input("Ask about a fund or a category..."):
     queue_action(prompt)
-
-with st.expander("Example queries"):
-    st.markdown(
-        "\n".join(
-            [
-                "- `top 10 funds in Large Cap Fund`",
-                "- `best funds in ELSS`",
-                "- `tell me about HDFC Flexi Cap fund`",
-                "- `what does Sharpe ratio mean?`",
-            ]
-        )
-    )
