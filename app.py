@@ -17,7 +17,7 @@ import streamlit as st
 from finance_bot import FinanceBot, subcat_browse_label
 from llm_fallback import get_llm_fallback
 
-st.set_page_config(page_title="FundGPT — Mutual Fund Bot", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Falakurra Fappu", page_icon="📈", layout="wide")
 
 # ---------------------------------------------------------------------
 # Style — minimal palette, generous tap targets, responsive grid.
