@@ -239,6 +239,111 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
 }
 [data-testid="stChatMessageContent"] a { color: var(--ff-accent) !important; font-weight: 500; text-decoration: underline; }
 
+/* ---- Top-funds list: a stack of cards instead of a wide table, so a
+   6-column comparison never forces horizontal scrolling or squashed text
+   on a phone. Each card is full-width and its metric chips wrap onto as
+   many lines as the screen needs. ---- */
+.ff-fundlist { margin: 0.6rem 0 0.8rem 0; }
+.ff-fundcard {
+    background: var(--ff-surface);
+    border: 1px solid var(--ff-border);
+    border-radius: var(--ff-radius);
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 0.6rem;
+}
+.ff-fundcard-head {
+    display: flex; align-items: center; gap: 0.6rem;
+    margin-bottom: 0.6rem;
+}
+.ff-rank {
+    flex: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--ff-surface-2); border: 1px solid var(--ff-border);
+    color: var(--ff-text-muted) !important;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; font-weight: 700;
+}
+.ff-fundcard:nth-child(1) .ff-rank,
+.ff-fundcard:first-child .ff-rank { color: var(--ff-accent) !important; border-color: var(--ff-accent); }
+.ff-fundname { flex: 1 1 auto; min-width: 0; }
+.ff-fundname a {
+    color: var(--ff-text) !important; font-weight: 600; font-size: 0.92rem;
+    text-decoration: none !important; line-height: 1.3;
+}
+.ff-fundname a:hover { color: var(--ff-accent) !important; text-decoration: underline !important; }
+.ff-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+    gap: 0.5rem 0.4rem;
+}
+.ff-metric {
+    display: flex; flex-direction: column; gap: 0.15rem;
+    background: var(--ff-surface-2);
+    border-radius: 8px;
+    padding: 0.35rem 0.5rem;
+}
+.ff-metric-label {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--ff-text-muted) !important; font-weight: 600;
+}
+.ff-metric-value { font-size: 0.86rem; font-weight: 600; color: var(--ff-text) !important; }
+.ff-metric-value.pos { color: #4ADE80 !important; }
+.ff-metric-value.neg { color: #F87171 !important; }
+
+/* ---- Performance & Risk by Horizon: styled <details>/<summary> so it
+   visibly reads as tappable (card + chevron + hover state) instead of
+   relying on the browser's tiny, easy-to-miss default triangle. ---- */
+.ff-hint { color: var(--ff-text-muted) !important; font-size: 0.8rem; font-style: italic; margin: 0.1rem 0 0.5rem 0; }
+.ff-horizons { margin-bottom: 0.4rem; }
+details.ff-horizon {
+    background: var(--ff-surface);
+    border: 1px solid var(--ff-border);
+    border-radius: var(--ff-radius);
+    margin-bottom: 0.45rem;
+    overflow: hidden;
+}
+details.ff-horizon summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0.65rem 0.9rem;
+    font-weight: 500;
+    transition: background 0.12s ease;
+}
+details.ff-horizon summary::-webkit-details-marker { display: none; }
+details.ff-horizon summary:hover { background: var(--ff-surface-2); }
+details.ff-horizon summary::after {
+    content: "";
+    margin-left: auto;
+    flex: none;
+    width: 7px; height: 7px;
+    border-right: 2px solid var(--ff-text-muted);
+    border-bottom: 2px solid var(--ff-text-muted);
+    transform: rotate(45deg);
+    transition: transform 0.15s ease;
+}
+details.ff-horizon[open] summary::after { transform: rotate(-135deg); }
+details.ff-horizon[open] summary { background: var(--ff-surface-2); border-bottom: 1px solid var(--ff-border); }
+.ff-h-period {
+    flex: none;
+    background: var(--ff-surface-2);
+    border: 1px solid var(--ff-border);
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.75rem; font-weight: 700;
+    color: var(--ff-text) !important;
+}
+details.ff-horizon[open] .ff-h-period { background: var(--ff-accent) !important; color: #171717 !important; border-color: var(--ff-accent); }
+.ff-h-return-wrap { display: flex; align-items: baseline; gap: 0.4rem; }
+.ff-h-return-label { color: var(--ff-text-muted) !important; font-size: 0.78rem; }
+.ff-h-return { font-weight: 700; color: var(--ff-text) !important; }
+.ff-h-return.pos { color: #4ADE80 !important; }
+.ff-h-return.neg { color: #F87171 !important; }
+details.ff-horizon ul {
+    margin: 0; padding: 0.7rem 1rem 0.85rem 2rem;
+}
+details.ff-horizon li { color: var(--ff-text) !important; padding: 0.15rem 0; }
+
 /* ---- Fixed bottom chat-input bar ---- */
 [data-testid="stBottomBlockContainer"], [data-testid="stBottom"] {
     background: linear-gradient(180deg, rgba(23,23,23,0), var(--ff-bg) 45%) !important;
@@ -512,4 +617,12 @@ st.markdown('</div>', unsafe_allow_html=True)
 #     with the OLD pending state and so would show no buttons at all
 #     until some unrelated rerun happened to catch up. ---
 if prompt := st.chat_input("Ask about a fund or a category..."):
+    # Every fresh search starts a brand-new thread rather than piling onto
+    # the old one -- same reset the "Clear chat" button does -- so the
+    # conversation always shows just the query just asked and its answer,
+    # not a long scroll-back of unrelated earlier searches.
+    bot.pending = None
+    st.session_state.messages = []
+    st.session_state.selected_asset_type = None
+    st.session_state.selected_subcat = None
     queue_action(prompt)
