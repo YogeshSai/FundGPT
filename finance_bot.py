@@ -1167,6 +1167,22 @@ class FinanceBot:
 
         if intent == "fund_info":
             fund_text = params["fund_text"]
+            # An exact Scheme Name match -- most notably a fund-name link
+            # clicked in a results table, which passes back the literal
+            # scheme name verbatim (see app.py's "?fund=<name>" handling)
+            # -- should resolve straight to that fund's profile. Without
+            # this check, an exact name still got run through the fuzzy
+            # multi-candidate ranker below, which can turn up OTHER
+            # plans/options of the same underlying fund (e.g. "- Regular
+            # Plan" or "- IDCW Option" variants) scoring above the 0.55
+            # cutoff too -- so clicking a fund link would confusingly ask
+            # the user to pick again from a list that includes the very
+            # fund they just clicked.
+            exact = self.df[
+                self.df["Scheme Name"].str.lower() == fund_text.strip().lower()
+            ]
+            if not exact.empty:
+                return self.format_fund_profile(exact.iloc[0])
             candidates = self.match_funds_ranked(fund_text, n=6)
             if candidates.empty:
                 return f"I couldn't find a fund matching '{fund_text}' in the dataset."
