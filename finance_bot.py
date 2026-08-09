@@ -455,6 +455,58 @@ def _fund_link(name: str) -> str:
     return f'<a href="?fund={quote(str(name))}" target="_self">{safe_name}</a>'
 
 
+# ----------------------------------------------------------------------
+# Compact plain-text metrics dump fed to the AI risk-summary call (see
+# llm_fallback.get_fund_risk_summarizer()). Deliberately not the full
+# rendered markdown profile -- just the handful of numbers that actually
+# drive a risk read: multi-horizon return/CAGR, the standard risk/
+# risk-adjusted-return metrics, peer percentile ranks, and the overall
+# composite score/rank. Percent-style fields are pre-converted here too,
+# so the LLM sees "16.03%" rather than a raw 0.1603 it would have to
+# reinterpret itself.
+# ----------------------------------------------------------------------
+_SUMMARY_PCT_SUFFIXES = {
+    "AbsoluteReturn", "CAGR", "Volatility", "MaxDrawdown",
+    "DownsideDev", "VaR95", "RollMean", "RollMin", "RollMax",
+}
+_SUMMARY_HORIZONS = ["1Y", "3Y", "5Y"]
+_SUMMARY_SUFFIXES = ["CAGR", "Volatility", "MaxDrawdown", "Sharpe", "Sortino", "Calmar"]
+
+
+def _fund_metrics_text(row: pd.Series) -> str:
+    lines = [f"Fund: {row.get('Scheme Name', 'Unknown')}"]
+    if "Sub Category" in row.index:
+        lines.append(f"Category: {clean_subcat_label(row['Sub Category'])}")
+
+    for horizon in _SUMMARY_HORIZONS:
+        parts = []
+        for suffix in _SUMMARY_SUFFIXES:
+            col = f"{horizon}_{suffix}"
+            if col not in row.index or pd.isna(row[col]):
+                continue
+            v = row[col]
+            if suffix in _SUMMARY_PCT_SUFFIXES:
+                parts.append(f"{suffix}={v * 100:.2f}%")
+            else:
+                parts.append(f"{suffix}={v:.2f}")
+        if parts:
+            lines.append(f"{horizon}: " + ", ".join(parts))
+
+    pctile_present = [c for c in PEER_PCTILE_COLS if c in row.index and not pd.isna(row[c])]
+    if pctile_present:
+        parts = []
+        for c in pctile_present:
+            label = c.replace("3Y_", "").replace("_PeerPctile", "")
+            parts.append(f"{label}={row[c] * 100:.0f}th pctile")
+        lines.append("3Y peer percentile ranks: " + ", ".join(parts))
+
+    for c in SCORE_COLS:
+        if c in row.index and not pd.isna(row[c]):
+            lines.append(f"{c.replace('_', ' ')}: {row[c]:.2f}")
+
+    return "\n".join(lines)
+
+
 class FundNotFoundError(Exception):
     pass
 
@@ -893,7 +945,7 @@ class FinanceBot:
     # ------------------------------------------------------------------
     # Formatting: full fund profile -> markdown
     # ------------------------------------------------------------------
-    def format_fund_profile(self, row: pd.Series) -> str:
+    def format_fund_profile(self, row: pd.Series, fund_summarizer=None) -> str:
         def fmt(v, is_subcat_field=False, is_percent=False):
             if pd.isna(v):
                 return "—"
@@ -925,19 +977,15 @@ class FinanceBot:
             for c in present:
                 suffix = c.split("_", 1)[1]
                 label = FRIENDLY_LABELS.get(suffix, suffix)
-                is_pct = suffix in ("AbsoluteReturn", "CAGR")
+                # These are all stored as fractions (0.16 == 16%) except
+                # Sharpe / Sortino / Calmar, which are dimensionless
+                # risk-adjusted-return ratios and are conventionally
+                # shown as plain numbers (e.g. "1.24"), not percentages.
+                is_pct = suffix in (
+                    "AbsoluteReturn", "CAGR", "Volatility", "MaxDrawdown",
+                    "DownsideDev", "VaR95", "RollMean", "RollMin", "RollMax",
+                )
                 out.append(f"| {label} | {fmt(row[c], is_percent=is_pct)} |")
-            out.append("")
-
-        pctile_present = [c for c in PEER_PCTILE_COLS if c in row.index]
-        if pctile_present:
-            out.append("**Peer Percentile Rank (3Y, within Sub Category)**")
-            out.append("| Metric | Percentile |")
-            out.append("|---|---|")
-            for c in pctile_present:
-                label = c.replace("3Y_", "").replace("_PeerPctile", "")
-                label = FRIENDLY_LABELS.get(label, label)
-                out.append(f"| {label} | {fmt(row[c])} |")
             out.append("")
 
         out.append("**Overall**")
@@ -946,6 +994,12 @@ class FinanceBot:
         for c in SCORE_COLS:
             if c in row.index:
                 out.append(f"| {c.replace('_', ' ')} | {fmt(row[c])} |")
+
+        summary_text = fund_summarizer(_fund_metrics_text(row)) if fund_summarizer else None
+        if summary_text:
+            out.append("")
+            out.append("**AI Risk Summary**")
+            out.append(summary_text)
 
         return "\n".join(out)
 
@@ -998,7 +1052,7 @@ class FinanceBot:
         best, score = self.best_sub_category_match(q, candidates=options)
         return best if score >= 0.3 else None
 
-    def _handle_pending(self, query: str) -> str | None:
+    def _handle_pending(self, query: str, fund_summarizer=None) -> str | None:
         """Advances the guided flow if one is in progress. Returns the
         response string, or None if there's no pending flow to handle."""
         if not self.pending:
@@ -1051,7 +1105,7 @@ class FinanceBot:
             match = self.df[self.df["Scheme Name"] == choice]
             if match.empty:
                 return f"I couldn't find '{choice}' in the dataset."
-            return self.format_fund_profile(match.iloc[0])
+            return self.format_fund_profile(match.iloc[0], fund_summarizer=fund_summarizer)
 
         # Unknown stage -- reset defensively.
         self.pending = None
@@ -1145,10 +1199,10 @@ class FinanceBot:
     # ------------------------------------------------------------------
     # Main entry point
     # ------------------------------------------------------------------
-    def respond(self, query: str, llm_fallback=None) -> str:
+    def respond(self, query: str, llm_fallback=None, fund_summarizer=None) -> str:
         # If a guided Asset Type / Sub Category flow is in progress, handle
         # the reply first regardless of what it looks like.
-        pending_response = self._handle_pending(query)
+        pending_response = self._handle_pending(query, fund_summarizer=fund_summarizer)
         if pending_response is not None:
             return pending_response
 
@@ -1182,14 +1236,14 @@ class FinanceBot:
                 self.df["Scheme Name"].str.lower() == fund_text.strip().lower()
             ]
             if not exact.empty:
-                return self.format_fund_profile(exact.iloc[0])
+                return self.format_fund_profile(exact.iloc[0], fund_summarizer=fund_summarizer)
             candidates = self.match_funds_ranked(fund_text, n=6)
             if candidates.empty:
                 return f"I couldn't find a fund matching '{fund_text}' in the dataset."
             if len(candidates) == 1:
                 # Only one close match -- nothing ambiguous to choose
                 # between, so show its profile directly.
-                return self.format_fund_profile(candidates.iloc[0])
+                return self.format_fund_profile(candidates.iloc[0], fund_summarizer=fund_summarizer)
             # Multiple close matches (different AMCs' similarly-named
             # funds, Direct vs Regular plan, Growth vs IDCW, ...) -- let
             # the user pick rather than silently guessing for them. Same
