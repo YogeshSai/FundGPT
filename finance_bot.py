@@ -221,6 +221,51 @@ def clean_subcat_label(raw: str) -> str:
     return text or str(raw)
 
 
+# ----------------------------------------------------------------------
+# Asset Type -> Sub Category mapping for the guided "Browse by Category"
+# flow.
+# ----------------------------------------------------------------------
+# The raw sheet can contain multiple different raw Sub Category strings
+# that all clean down to the *same* display label -- most commonly an
+# "Open Ended Schemes(X)" row and a "Close Ended Schemes(X)" row both
+# collapsing to just "X" via clean_subcat_label(). Building the browse
+# list straight from raw unique values (as before) let both survive as
+# separate list entries, so the same label appeared TWICE under one
+# Asset Type (duplicate), and if the two raw rows happened to carry
+# different "Asset Class" values in the sheet, the same label would also
+# show up under two different Asset Types (misplaced).
+#
+# _build_asset_type_subcat_map() fixes both by grouping on the CLEANED
+# label instead of the raw string: each cleaned label is collapsed to a
+# single representative raw value, and -- when a label's rows span more
+# than one Asset Type -- assigned to whichever Asset Type actually holds
+# the most funds for it, so it appears in exactly one place.
+def _build_asset_type_subcat_map(
+    df: pd.DataFrame, asset_types: list[str]
+) -> dict[str, list[str]]:
+    # cleaned_label -> {asset_type: (raw_value_with_max_count, fund_count)}
+    label_asset_counts: dict[str, dict[str, tuple[str, int]]] = {}
+
+    grouped = df.groupby(["Asset Class", "Sub Category"]).size()
+    for (asset, raw_subcat), count in grouped.items():
+        label = clean_subcat_label(raw_subcat)
+        by_asset = label_asset_counts.setdefault(label, {})
+        current = by_asset.get(asset)
+        if current is None or count > current[1]:
+            by_asset[asset] = (raw_subcat, count)
+
+    result: dict[str, list[str]] = {asset: [] for asset in asset_types}
+    for label, by_asset in label_asset_counts.items():
+        best_asset = max(by_asset, key=lambda a: by_asset[a][1])
+        raw_value = by_asset[best_asset][0]
+        result.setdefault(best_asset, []).append(raw_value)
+
+    for asset in result:
+        result[asset] = sorted(result[asset], key=lambda raw: clean_subcat_label(raw))
+
+    return result
+
+
 def _fund_link(name: str) -> str:
     """Raw HTML anchor (not markdown syntax) so we can force target="_self" --
     plain markdown '[text](url)' links get target="_blank" forced on them by
@@ -261,6 +306,16 @@ class FinanceBot:
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Dataset is missing required columns: {missing}")
+
+        # Strip stray leading/trailing whitespace from the text fields the
+        # guided browse flow groups on. Untrimmed whitespace (e.g. a sheet
+        # value of "Equity " next to "Equity") would otherwise be treated
+        # as a distinct value and produce the same duplicate/misplaced
+        # symptom as the Open/Close-Ended wrapper issue below.
+        for col in ("Sub Category", "Asset Class"):
+            if col in df.columns:
+                df[col] = df[col].apply(lambda v: v.strip() if isinstance(v, str) else v)
+
         self.df = df
         self._scheme_names = df["Scheme Name"].astype(str).tolist()
         self._sub_categories = sorted(df["Sub Category"].dropna().unique().tolist())
@@ -268,13 +323,7 @@ class FinanceBot:
         # Build Asset Type -> [Sub Category, ...] mapping for the guided flow.
         if "Asset Class" in df.columns:
             self._asset_types = sorted(df["Asset Class"].dropna().unique().tolist())
-            self._asset_type_to_subcats = {
-                asset: sorted(
-                    df.loc[df["Asset Class"] == asset, "Sub Category"]
-                    .dropna().unique().tolist()
-                )
-                for asset in self._asset_types
-            }
+            self._asset_type_to_subcats = _build_asset_type_subcat_map(df, self._asset_types)
         else:
             # No Asset Class column -> treat everything as one bucket.
             self._asset_types = ["All Funds"]
