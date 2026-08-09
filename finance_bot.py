@@ -318,6 +318,20 @@ def subcat_browse_label(raw: str) -> str:
 
 
 # ----------------------------------------------------------------------
+# Free-text category matching helpers
+# ----------------------------------------------------------------------
+def _normalize_category_text(text: str) -> str:
+    """Lowercase + collapse whitespace + singularize the standalone word
+    'funds' -> 'fund' so a plural user query ('small cap funds') and a
+    singular dataset label ('Small Cap Fund') aren't treated as different
+    strings by an exact-substring check purely over the trailing 's'."""
+    t = str(text or "").lower().strip()
+    t = re.sub(r"\bfunds\b", "fund", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+# ----------------------------------------------------------------------
 # Asset Type -> Sub Category mapping for the guided "Browse by Category"
 # flow.
 # ----------------------------------------------------------------------
@@ -486,13 +500,23 @@ class FinanceBot:
 
     # ------------------------------------------------------------------
     # Sub-category matching -- fuzzy, highest-score based (no exact text
-    # required). Matching always runs against the raw dataset values.
+    # required). Matching runs against the *cleaned* display label (the
+    # "Open/Close Ended Schemes(...)" wrapper stripped out), not the raw
+    # dataset string. Comparing against the raw value let its wrapper text
+    # dilute difflib's length-sensitive ratio -- a long, correct raw value
+    # like "Open Ended Schemes(Equity Scheme - Small Cap Fund)" could
+    # score WORSE against a short query than an unrelated but
+    # coincidentally short raw label with no scheme-type prefix (e.g.
+    # "Open Ended Schemes(IL&FS Mutual Fund IDF)"), purely because of
+    # string-length mismatch, not actual relevance. The raw Sub Category
+    # value is still what gets returned/used for filtering -- only the
+    # comparison text changes.
     # Returns the best matching (raw) Sub Category and its score.
     # ------------------------------------------------------------------
     def best_sub_category_match(
         self, query: str, candidates: list[str] | None = None
     ) -> tuple[str | None, float]:
-        q = (query or "").strip().lower()
+        q = _normalize_category_text(query)
         if not q:
             return None, 0.0
 
@@ -502,13 +526,15 @@ class FinanceBot:
 
         best_sc, best_score = None, 0.0
         for sc in pool:
-            sc_l = sc.lower()
-            if sc_l == q:
+            label_l = _normalize_category_text(clean_subcat_label(sc))
+            if label_l == q:
                 return sc, 1.0
 
-            score = difflib.SequenceMatcher(None, q, sc_l).ratio()
-            # Boost substring matches (e.g. "large cap" inside "Large Cap Fund")
-            if q in sc_l or sc_l.replace(" fund", "").strip() in q:
+            score = difflib.SequenceMatcher(None, q, label_l).ratio()
+            # Boost substring matches (e.g. "large cap" inside "Large Cap
+            # Fund", or "small cap fund" -- after pluralization is
+            # normalized above -- inside "Small Cap Fund").
+            if q in label_l or label_l.replace(" fund", "").strip() in q:
                 score = max(score, 0.85)
 
             if score > best_score:
@@ -518,15 +544,17 @@ class FinanceBot:
 
     def match_sub_categories(self, query: str, limit: int = 3) -> list[str]:
         """Kept for backward compatibility: returns a short ranked list
-        of raw Sub Category values."""
-        q = query.strip().lower()
+        of raw Sub Category values. Uses the same cleaned-label / plural-
+        normalized comparison as best_sub_category_match() so results here
+        stay consistent with what a single lookup would pick."""
+        q = _normalize_category_text(query)
         if not q:
             return []
         scored = []
         for sc in self._sub_categories:
-            sc_l = sc.lower()
-            score = difflib.SequenceMatcher(None, q, sc_l).ratio()
-            if q in sc_l or sc_l.replace(" fund", "").strip() in q:
+            label_l = _normalize_category_text(clean_subcat_label(sc))
+            score = difflib.SequenceMatcher(None, q, label_l).ratio()
+            if q in label_l or label_l.replace(" fund", "").strip() in q:
                 score = max(score, 0.85)
             scored.append((sc, score))
         scored.sort(key=lambda x: x[1], reverse=True)
