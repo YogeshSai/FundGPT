@@ -221,6 +221,55 @@ def clean_subcat_label(raw: str) -> str:
     return text or str(raw)
 
 
+# Scheme-type prefixes stripped only for BROWSE-LIST display (see
+# subcat_browse_label below) -- kept separate from clean_subcat_label
+# because the Top-N table header and a fund's full profile still want
+# the scheme-type shown (they aren't rendered inside an Asset-Type-
+# scoped list, so "Contra Fund" alone would lose useful context there).
+# Longer/more specific phrases are listed first so e.g. "equity schemes"
+# matches before the shorter "equity scheme" would partially match it.
+_SCHEME_TYPE_PREFIXES = [
+    "income/debt oriented schemes",
+    "exchange traded funds etfs",
+    "overseas fund of funds",
+    "solution oriented scheme",
+    "debt schemes", "debt scheme",
+    "equity schemes", "equity scheme",
+    "hybrid schemes", "hybrid scheme",
+    "index funds",
+    "other scheme",
+]
+
+
+def strip_scheme_type_prefix(label: str) -> str:
+    """Remove a leading 'Debt Scheme - ' / 'Equity Scheme - ' / ... style
+    prefix from an already wrapper-cleaned Sub Category label. Falls
+    back to the original label if nothing would be left after stripping
+    (e.g. a bare 'Equity Scheme' with no specific fund type), so an
+    option is never shown blank."""
+    text = str(label)
+    text_l = text.lower()
+    for prefix in _SCHEME_TYPE_PREFIXES:
+        if text_l.startswith(prefix):
+            rest = text[len(prefix):].lstrip(" -")
+            return rest or text
+    return text
+
+
+def subcat_browse_label(raw: str) -> str:
+    """Display label for a Sub Category when it's shown as an option
+    inside an Asset-Type-scoped browse list (the guided flow buttons /
+    the sidebar's Step 2 list): both the 'Open/Close Ended Schemes'
+    wrapper AND the redundant scheme-type prefix are stripped, since the
+    Asset Type is already implied by which list the option is in --
+    e.g. 'Equity Scheme - Contra Fund' -> 'Contra Fund' when it's
+    already under the "Equity" list. Used as the dedup key when building
+    that list too, so a scheme-prefixed and a bare variant that reduce
+    to the same short label (e.g. "Equity Scheme - ELSS" and "ELSS")
+    collapse to one option instead of showing as two identical entries."""
+    return strip_scheme_type_prefix(clean_subcat_label(raw))
+
+
 # ----------------------------------------------------------------------
 # Asset Type -> Sub Category mapping for the guided "Browse by Category"
 # flow.
@@ -286,7 +335,7 @@ def _build_asset_type_subcat_map(
     for (asset_class, raw_subcat), count in counts.items():
         asset_type = _infer_asset_type(raw_subcat) or asset_class
         by_label = buckets.setdefault(asset_type, {})
-        label = clean_subcat_label(raw_subcat)
+        label = subcat_browse_label(raw_subcat)
         current = by_label.get(label)
         if current is None or count > current[1]:
             by_label[label] = (raw_subcat, count)
@@ -294,7 +343,7 @@ def _build_asset_type_subcat_map(
     result: dict[str, list[str]] = {}
     for asset_type, by_label in buckets.items():
         raws = [raw for raw, _ in by_label.values()]
-        result[asset_type] = sorted(raws, key=clean_subcat_label)
+        result[asset_type] = sorted(raws, key=subcat_browse_label)
 
     return result
 
@@ -607,7 +656,7 @@ class FinanceBot:
         return [
             {
                 "index": i,
-                "label": clean_subcat_label(opt) if clean else opt,
+                "label": subcat_browse_label(opt) if clean else opt,
                 "value": opt,
             }
             for i, opt in enumerate(options, start=1)
