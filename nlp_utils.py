@@ -69,21 +69,21 @@ def extract_number_word(text: str) -> int | None:
 
 @lru_cache(maxsize=1)
 def _get_nlp():
-    """Lazily load a lightweight spaCy pipeline once per process (tagger/
-    parser/NER/lemmatizer disabled -- we only need the tokenizer, and we
-    build our own AMC vocabulary via PhraseMatcher below since the stock
-    English NER model was never trained to recognize Indian AMC names).
-    Returns None if the model isn't installed, so callers can fall back
-    to a pure string-matching path instead of crashing."""
+    """A blank spaCy English pipeline -- tokenizer only, no trained
+    components and no downloaded model. We build our own AMC vocabulary
+    via PhraseMatcher below (the stock English NER model was never
+    trained to recognize Indian AMC names anyway, so a downloaded model
+    would buy us nothing here), so all we actually need from spaCy is
+    its tokenizer. spacy.blank("en") ships with the base `spacy` pip
+    package -- no `python -m spacy download ...` step, no separate model
+    wheel to install, which also sidesteps deploy environments (e.g.
+    Streamlit Community Cloud) whose installers can reject a direct-URL
+    model dependency in requirements.txt.
+    Returns None only if spaCy itself isn't installed, so callers can
+    fall back to a pure string-matching path instead of crashing."""
     if not _SPACY_IMPORT_OK:
         return None
-    try:
-        return spacy.load(
-            "en_core_web_sm",
-            disable=["tagger", "parser", "ner", "lemmatizer", "attribute_ruler"],
-        )
-    except OSError:
-        return None
+    return spacy.blank("en")
 
 
 class AMCMatcher:
