@@ -140,17 +140,35 @@ SUBCAT_MATCH_THRESHOLD = 0.35
 # with identical (or near-identical) return/risk metrics. We collapse
 # these down to a single row -- preferring the Growth variant -- before
 # ranking/displaying "top funds".
-_OPTION_KEYWORDS = ["idcw", "dividend", "growth", "payout", "reinvestment", "bonus"]
+_OPTION_PHRASES = [
+    # Longer, descriptive variants FIRST -- these are the newer full-length
+    # payout-option names funds have started using instead of the short
+    # "IDCW" / "Dividend" suffix, e.g. "SBI Contra Fund - Direct Plan -
+    # Income Distribution cum Capital Withdrawal Option (IDCW)". Stripping
+    # only the bare word "idcw" leaves the rest of this phrase behind,
+    # which then fails to match the Growth variant's key and lets both
+    # rows survive dedup -- checked here explicitly to avoid that.
+    "payout & re-investment of income distribution cum capital withdrawal option",
+    "payout and re-investment of income distribution cum capital withdrawal option",
+    "income distribution cum capital withdrawal option",
+    "idcw", "dividend", "growth", "payout", "reinvestment", "bonus",
+]
+# Backward-compatible alias.
+_OPTION_KEYWORDS = _OPTION_PHRASES
 
 
 def _fund_dedup_key(name: str) -> str:
-    """Normalized identity for a fund, with the plan-option word (Growth /
-    IDCW / Dividend / ...) stripped out so different options of the same
-    underlying fund collapse to the same key. 'Direct'/'Regular Plan' is
-    deliberately kept, since those ARE genuinely different funds/TERs."""
+    """Normalized identity for a fund, with the plan-option phrase (Growth /
+    IDCW / Income Distribution cum Capital Withdrawal Option / Dividend /
+    ...) stripped out so different options of the same underlying fund
+    collapse to the same key. 'Direct'/'Regular Plan' is deliberately kept,
+    since those ARE genuinely different funds/TERs."""
     text = str(name).lower()
-    for kw in _OPTION_KEYWORDS:
-        text = re.sub(rf"\b{kw}\b", "", text)
+    for phrase in _OPTION_PHRASES:
+        text = re.sub(re.escape(phrase), " ", text, flags=re.IGNORECASE)
+    # Leftover punctuation from a fully-stripped phrase, e.g. "(  )" or
+    # a trailing "- -", would otherwise stop two variants' keys matching.
+    text = re.sub(r"[()]", " ", text)
     text = re.sub(r"\s+", " ", text).strip(" -")
     return text
 
