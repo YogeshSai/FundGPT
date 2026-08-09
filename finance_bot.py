@@ -225,43 +225,76 @@ def clean_subcat_label(raw: str) -> str:
 # Asset Type -> Sub Category mapping for the guided "Browse by Category"
 # flow.
 # ----------------------------------------------------------------------
-# The raw sheet can contain multiple different raw Sub Category strings
-# that all clean down to the *same* display label -- most commonly an
-# "Open Ended Schemes(X)" row and a "Close Ended Schemes(X)" row both
-# collapsing to just "X" via clean_subcat_label(). Building the browse
-# list straight from raw unique values (as before) let both survive as
-# separate list entries, so the same label appeared TWICE under one
-# Asset Type (duplicate), and if the two raw rows happened to carry
-# different "Asset Class" values in the sheet, the same label would also
-# show up under two different Asset Types (misplaced).
+# Two separate problems showed up here:
 #
-# _build_asset_type_subcat_map() fixes both by grouping on the CLEANED
-# label instead of the raw string: each cleaned label is collapsed to a
-# single representative raw value, and -- when a label's rows span more
-# than one Asset Type -- assigned to whichever Asset Type actually holds
-# the most funds for it, so it appears in exactly one place.
+#   1. DUPLICATES: the raw sheet can contain multiple different raw Sub
+#      Category strings that all clean down to the *same* display label
+#      -- most commonly an "Open Ended Schemes(X)" row and a "Close Ended
+#      Schemes(X)" row both collapsing to just "X" via
+#      clean_subcat_label(). Building the browse list from raw unique
+#      values let both survive as separate list entries, so the same
+#      label appeared twice under one Asset Type.
+#
+#   2. MISPLACEMENT: grouping by the sheet's "Asset Class" column trusts
+#      that column to be tagged correctly per row. In practice it isn't
+#      -- e.g. many "Debt Scheme - ..." / "Hybrid Scheme - ..." /
+#      "Solution Oriented Scheme - ..." rows turned out to be tagged
+#      Asset Class = "Equity", which then made ALL of those categories
+#      surface under the "Equity" bucket instead of their real one.
+#
+# The fix for both: classify each Sub Category by the SEBI scheme-type
+# phrase already embedded in its own text ("Debt Scheme - ...",
+# "Equity Scheme - ...", "Hybrid Scheme - ...", "Index Funds - ...",
+# "Solution Oriented Scheme - ...", "Other Scheme - ..."), which is
+# self-describing and doesn't depend on a separate column that can be
+# mistagged. The "Asset Class" column is used only as a fallback for the
+# handful of legacy labels ("ELSS", "Growth", "Income", ...) that carry
+# no scheme-type phrase of their own.
+_ASSET_TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("Solution Oriented", ["solution oriented"]),
+    ("Index ETF", ["index fund", "exchange traded fund", "etf"]),
+    ("Hybrid", ["hybrid scheme"]),
+    ("Equity", ["equity scheme", "elss"]),
+    ("Debt", ["debt scheme", "income/debt oriented", "il&fs", "idf", "income"]),
+    ("Other", ["other scheme", "fund of funds"]),
+]
+
+
+def _infer_asset_type(raw_subcat: str) -> str | None:
+    """Classify a raw Sub Category string by the scheme-type phrase
+    embedded in its own text. Returns None if no known phrase is found,
+    so the caller can fall back to the row's "Asset Class" value."""
+    text = str(raw_subcat).lower()
+    for asset_type, keywords in _ASSET_TYPE_KEYWORDS:
+        if any(kw in text for kw in keywords):
+            return asset_type
+    return None
+
+
 def _build_asset_type_subcat_map(
     df: pd.DataFrame, asset_types: list[str]
 ) -> dict[str, list[str]]:
-    # cleaned_label -> {asset_type: (raw_value_with_max_count, fund_count)}
-    label_asset_counts: dict[str, dict[str, tuple[str, int]]] = {}
+    """Build Asset Type -> [Sub Category, ...] for the guided browse
+    flow. Each cleaned display label is collapsed to a single
+    representative raw value per Asset Type (fixes duplicates), and each
+    Sub Category is bucketed by its own embedded scheme-type phrase
+    rather than the sheet's "Asset Class" column (fixes misplacement)."""
+    # asset_type -> {cleaned_label: (raw_value_with_max_count, fund_count)}
+    buckets: dict[str, dict[str, tuple[str, int]]] = {a: {} for a in asset_types}
 
-    grouped = df.groupby(["Asset Class", "Sub Category"]).size()
-    for (asset, raw_subcat), count in grouped.items():
+    counts = df.groupby(["Asset Class", "Sub Category"]).size()
+    for (asset_class, raw_subcat), count in counts.items():
+        asset_type = _infer_asset_type(raw_subcat) or asset_class
+        by_label = buckets.setdefault(asset_type, {})
         label = clean_subcat_label(raw_subcat)
-        by_asset = label_asset_counts.setdefault(label, {})
-        current = by_asset.get(asset)
+        current = by_label.get(label)
         if current is None or count > current[1]:
-            by_asset[asset] = (raw_subcat, count)
+            by_label[label] = (raw_subcat, count)
 
-    result: dict[str, list[str]] = {asset: [] for asset in asset_types}
-    for label, by_asset in label_asset_counts.items():
-        best_asset = max(by_asset, key=lambda a: by_asset[a][1])
-        raw_value = by_asset[best_asset][0]
-        result.setdefault(best_asset, []).append(raw_value)
-
-    for asset in result:
-        result[asset] = sorted(result[asset], key=lambda raw: clean_subcat_label(raw))
+    result: dict[str, list[str]] = {}
+    for asset_type, by_label in buckets.items():
+        raws = [raw for raw, _ in by_label.values()]
+        result[asset_type] = sorted(raws, key=clean_subcat_label)
 
     return result
 
