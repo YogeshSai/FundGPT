@@ -365,14 +365,29 @@ class FinanceBot:
         if subset.empty:
             return subset
         subset = dedup_funds(subset)
+
+        # Only one fund per AMC in the displayed set -- if two funds from the
+        # same fund house both land inside the peer-rank-<=n pool, keep just
+        # the better-ranked one rather than showing the AMC twice. This is
+        # NOT a backfill: if dropping same-AMC duplicates leaves fewer than
+        # n rows, that's the final (shorter) result -- we don't reach past
+        # rank n to top the count back up.
+        amc_col = "AMC (Fund House)" if "AMC (Fund House)" in subset.columns else None
+
         if "Peer_Rank" in subset.columns:
             subset["Peer_Rank"]=pd.to_numeric(subset["Peer_Rank"],errors="coerce")
             subset=subset.dropna(subset=["Peer_Rank"])
             subset=subset[subset["Peer_Rank"]<=n]
-            return subset.sort_values(["Peer_Rank","Composite_Score"],ascending=[True,False])
+            subset=subset.sort_values(["Peer_Rank","Composite_Score"],ascending=[True,False])
+            if amc_col:
+                subset = subset.drop_duplicates(subset=amc_col, keep="first")
+            return subset
         if sort_by not in subset.columns:
             sort_by="Composite_Score"
-        return subset.sort_values(sort_by,ascending=False).head(n)
+        subset = subset.sort_values(sort_by,ascending=False)
+        if amc_col:
+            subset = subset.drop_duplicates(subset=amc_col, keep="first")
+        return subset.head(n)
 
     # ------------------------------------------------------------------
     # Formatting: top-N table -> markdown
