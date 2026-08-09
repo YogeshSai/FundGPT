@@ -86,6 +86,7 @@ from nlp_utils import (
     fuzzy_ratio,
     ranked_fuzzy_matches,
 )
+from llm_fallback import parse_fund_verdict
 
 # ----------------------------------------------------------------------
 # Fixed dataset location -- this is the single, static source of data.
@@ -1006,9 +1007,13 @@ class FinanceBot:
 
         summary_text = fund_summarizer(_fund_metrics_text(row)) if fund_summarizer else None
         if summary_text:
+            badge, body = parse_fund_verdict(summary_text)
             out.append("")
-            out.append("**AI Risk Summary**")
-            out.append(summary_text)
+            out.append("**AI Verdict**")
+            if badge:
+                out.append(badge)
+                out.append("")
+            out.append(body)
 
         return "\n".join(out)
 
