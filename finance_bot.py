@@ -602,7 +602,7 @@ class FinanceBot:
             return f"I couldn't find any funds in **{clean_subcat_label(sub_category)}**."
 
         cols = [c for c in TOP_N_TABLE_COLS if c in subset.columns]
-        lines = [f"### Top {n} Peer Ranks in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
+        lines = [f"### Top {n} Performing funds in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
         header = "| # | " + " | ".join(cols) + " |"
         sep = "|---|" + "|".join(["---"] * len(cols)) + "|"
         lines += [header, sep]
