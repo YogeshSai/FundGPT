@@ -16,6 +16,7 @@ in the sidebar).
 from __future__ import annotations
 
 import os
+import re
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant embedded in FundFinder, a mutual fund "
@@ -90,20 +91,53 @@ FUND_SUMMARY_SYSTEM_PROMPT = (
     "across horizons, volatility, max drawdown, Sharpe/Sortino/Calmar "
     "ratios, Value at Risk, downside deviation, and its percentile rank "
     "vs. category peers). Using ONLY the numbers given:\n"
-    "1. Write 3-5 short sentences in plain language on what the "
-    "risk/reward profile looks like (return consistency, volatility, "
-    "drawdown severity, and how it stacks up against peers).\n"
-    "2. End with exactly one line starting with 'Lean:' followed by one "
-    "of: 'Worth considering', 'Mixed / proceed with caution', or "
-    "'Weak on these metrics' -- picked purely from the numbers, not "
-    "general market views.\n"
-    "3. Add a final short line reminding the reader this is an "
+    "1. Your FIRST line must be exactly 'VERDICT: X' where X is one of "
+    "INVEST, AVOID, or NEUTRAL -- your verdict on whether this fund is "
+    "worth investing in, judged purely from the numbers. Use NEUTRAL "
+    "only when the metrics are genuinely mixed with no clear lean either "
+    "way; prefer INVEST or AVOID whenever the numbers support one.\n"
+    "2. Then, after a blank line, write 3-5 short sentences in plain "
+    "language explaining WHY -- reference the specific return "
+    "consistency, volatility, drawdown severity, and peer standing that "
+    "drove your verdict. Reference only the few numbers that matter "
+    "most; do not repeat every metric back.\n"
+    "3. End with exactly one more line: a short reminder that this is an "
     "automated read of historical numbers only, is NOT personalized "
-    "financial advice, and they should consult a qualified financial "
-    "advisor and consider their own goals/horizon before investing.\n"
-    "Do not repeat every number back -- reference only the few that "
-    "matter most for the summary."
+    "financial advice, and the reader should consult a qualified "
+    "financial advisor and consider their own goals/horizon before "
+    "investing.\n"
+    "Do not include any other headings, labels, or text before the "
+    "VERDICT line."
 )
+
+# Parses the "VERDICT: X" line the prompt above requires back out of the
+# model's response, so the UI can render it as its own prominent badge
+# instead of leaving the invest/avoid call buried inside a paragraph.
+# Falls back to (None, original_text) untouched if the model ever
+# deviates from the requested format, so a malformed response still
+# displays (just without the badge) instead of losing the summary.
+_VERDICT_RE = re.compile(r"^\s*VERDICT:\s*(INVEST|AVOID|NEUTRAL)\s*$", re.IGNORECASE | re.MULTILINE)
+
+_VERDICT_BADGES = {
+    "INVEST": "🟢 **INVEST**",
+    "AVOID": "🔴 **AVOID**",
+    "NEUTRAL": "🟡 **NEUTRAL**",
+}
+
+
+def parse_fund_verdict(summary_text: str) -> tuple[str | None, str]:
+    """Splits a fund-summary response into (verdict_badge_markdown, rest).
+    verdict_badge_markdown is None if no VERDICT line was found (e.g. the
+    model deviated from the format) -- callers should just render `rest`
+    (equal to the original text in that case) with no badge."""
+    if not summary_text:
+        return None, summary_text
+    m = _VERDICT_RE.search(summary_text)
+    if not m:
+        return None, summary_text
+    verdict = m.group(1).upper()
+    rest = (summary_text[:m.start()] + summary_text[m.end():]).strip()
+    return _VERDICT_BADGES[verdict], rest
 
 
 def get_fund_risk_summarizer():
