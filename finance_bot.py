@@ -27,6 +27,19 @@ Responsibilities:
      buttons / a side-panel list instead of (or in addition to) the table.
   6. Optional LLM fallback (Groq) for free-form finance questions that
      aren't a direct top-N or fund-lookup request. See llm_fallback.py.
+
+Sub Category canonicalization
+------------------------------
+The raw dataset sometimes tags the *same* SEBI category under two
+different spellings -- most notably ELSS appearing both as plain
+"...(ELSS)" and as "...(ELSS Tax Saver)" / "...(ELSS Tax Saver Fund)".
+Since every downstream feature (the sub-category matcher, the Asset
+Type -> Sub Category browse map, and top_funds()) keys off the raw
+"Sub Category" column verbatim, two spellings of the same category
+would otherwise survive as two separate entries everywhere -- the
+sidebar list, the guided-flow buttons, and top-N results. See
+`_canonicalize_subcat`, which is applied once at load time so every
+consumer downstream sees a single merged value instead.
 """
 
 from __future__ import annotations
@@ -129,6 +142,37 @@ FRIENDLY_LABELS = {
 # Minimum similarity score (0-1) required to auto-accept a free-text
 # Sub Category match without falling back to the guided button flow.
 SUBCAT_MATCH_THRESHOLD = 0.35
+
+# ----------------------------------------------------------------------
+# Sub Category canonicalization -- merge known duplicate raw spellings
+# ----------------------------------------------------------------------
+# The dataset can tag the SAME SEBI category under different raw
+# "Sub Category" strings. Left unmerged, this shows up as duplicate
+# entries in the browse list and splits a single category's funds
+# across two separate top_funds() results. This runs once at load time
+# (see FinanceBot.load_data), before _sub_categories / the Asset Type
+# map are built, so every downstream consumer sees one merged value.
+#
+# Known duplicate: ELSS vs. "ELSS Tax Saver" / "ELSS Tax Saver Fund" --
+# same category, two spellings. Add further phrase-merge rules here if
+# more duplicates like this turn up in the sheet.
+_ELSS_VARIANT_RE = re.compile(
+    r"elss(\s*-?\s*tax\s*saver(\s*fund)?)?", re.IGNORECASE
+)
+
+
+def _canonicalize_subcat(raw):
+    """Collapse known duplicate raw Sub Category spellings onto one
+    canonical value. Preserves whatever wrapper the row already has
+    ('Open Ended Schemes(...)' etc.) -- only the inner category phrase
+    is normalized, so matching against the rest of the dataset (and the
+    wrapper-stripping helpers below) still works unchanged."""
+    if not isinstance(raw, str):
+        return raw
+    if "elss" in raw.lower():
+        return _ELSS_VARIANT_RE.sub("ELSS", raw)
+    return raw
+
 
 # ----------------------------------------------------------------------
 # De-duplicating "same fund, different plan/option" rows
@@ -282,7 +326,10 @@ def subcat_browse_label(raw: str) -> str:
 #      Schemes(X)" row both collapsing to just "X" via
 #      clean_subcat_label(). Building the browse list from raw unique
 #      values let both survive as separate list entries, so the same
-#      label appeared twice under one Asset Type.
+#      label appeared twice under one Asset Type. (A related case --
+#      ELSS vs. "ELSS Tax Saver" -- is handled earlier, upstream of this,
+#      by _canonicalize_subcat() in load_data(), since those two raw
+#      strings don't even clean down to the same text on their own.)
 #
 #   2. MISPLACEMENT: grouping by the sheet's "Asset Class" column trusts
 #      that column to be tagged correctly per row. In practice it isn't
@@ -397,6 +444,14 @@ class FinanceBot:
         for col in ("Sub Category", "Asset Class"):
             if col in df.columns:
                 df[col] = df[col].apply(lambda v: v.strip() if isinstance(v, str) else v)
+
+        # Merge known duplicate Sub Category spellings (e.g. plain "ELSS"
+        # vs. "ELSS Tax Saver" / "ELSS Tax Saver Fund") onto one canonical
+        # value. This MUST run before _sub_categories / the Asset Type map
+        # are built below, since everything downstream keys off this
+        # column verbatim.
+        if "Sub Category" in df.columns:
+            df["Sub Category"] = df["Sub Category"].apply(_canonicalize_subcat)
 
         self.df = df
         self._scheme_names = df["Scheme Name"].astype(str).tolist()
