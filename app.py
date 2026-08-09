@@ -3,10 +3,14 @@ app.py
 ------
 Streamlit frontend for FundGPT — an AI-powered Mutual Fund analytics chatbot.
 
-Responsive UI: a single, full-width nav list in the sidebar for desktop, plus
-an equivalent tap-friendly flow inline in the chat itself (toolbar button +
-suggestion chips + guided option buttons) so every feature is reachable on a
-phone without ever needing to open the sidebar.
+Responsive UI:
+- Desktop-friendly category browser in the sidebar
+- Mobile-friendly guided category flow inside the chat
+- Chat input always available
+- "Browse by category" and "Clear chat" buttons placed BELOW the chat input
+- Quick-start suggestion chips
+- Fund links through query parameters
+- Optional LLM fallback for general finance questions
 
 Run:
     streamlit run app.py
@@ -17,490 +21,745 @@ import streamlit as st
 from finance_bot import FinanceBot, subcat_browse_label
 from llm_fallback import get_llm_fallback
 
-st.set_page_config(page_title="Falakurra Fappu", page_icon="📈", layout="wide")
 
 # ---------------------------------------------------------------------
-# Style — minimal palette, generous tap targets, responsive grid.
+# PAGE CONFIG
 # ---------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="FundGPT",
+    page_icon="📈",
+    layout="wide",
+)
+
+
+# ---------------------------------------------------------------------
+# CUSTOM CSS
+# ---------------------------------------------------------------------
+
 CUSTOM_CSS = """
 <style>
-/* Go fully dark end-to-end (previously we fought the environment's dark
-   rendering with a light override, which is why the input box stayed
-   dark while only some elements picked up the light theme — that
-   mismatch is the "boxes / invisible text" bug). */
-:root, html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
-    --text-color: #ECECEC !important;
-    --background-color: #171717 !important;
-    --secondary-background-color: #1E1E1E !important;
-    --primary-color: #8B7CF6 !important;
-    color-scheme: dark !important;
-}
-:root {
-    --ff-bg: #171717;
-    --ff-surface: #1E1E1E;
-    --ff-surface-2: #262626;
-    --ff-border: #2E2E2E;
-    --ff-text: #ECECEC;
-    --ff-text-muted: #9B9B9B;
-    --ff-accent: #8B7CF6;
-    --ff-radius: 10px;
-}
-html, body { color-scheme: dark !important; }
 
-[data-testid="stAppViewContainer"] { background: var(--ff-bg) !important; }
-[data-testid="stHeader"] { background: transparent !important; }
+/* ================================================================
+   GENERAL
+   ================================================================ */
 
-[data-testid="stAppViewContainer"] *, [data-testid="stSidebar"] * {
-    color: var(--ff-text);
+.block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
 }
 
-.main .block-container {
-    max-width: 780px;
-    padding-top: 1.4rem;
-    padding-bottom: 7.5rem;
-}
 
-@media (max-width: 680px) {
-    div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
-    div[data-testid="column"] { min-width: 100% !important; flex: 1 1 100% !important; }
-    .main .block-container { padding-left: 0.9rem; padding-right: 0.9rem; }
-}
+/* ================================================================
+   APP HEADER
+   ================================================================ */
 
-/* ---- Brand header: plain, no emoji, no heavy effects ---- */
-.ff-brand { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.1rem; }
-.ff-brand .ff-mark {
-    width: 32px; height: 32px; border-radius: 8px;
-    background: var(--ff-surface-2); color: var(--ff-text) !important;
-    border: 1px solid var(--ff-border);
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 600; font-size: 0.85rem;
-}
-.ff-brand .ff-mark * { color: var(--ff-text) !important; }
-.ff-brand .ff-title { font-size: 1.25rem; font-weight: 600; color: var(--ff-text) !important; }
-.ff-sub { color: var(--ff-text-muted) !important; font-size: 0.88rem; margin: 0.15rem 0 1.2rem 0; }
-
-/* ---- Status pill ---- */
-.ff-pill {
-    display: inline-flex; align-items: center; gap: 0.4rem;
-    font-size: 0.78rem; font-weight: 500; border-radius: 999px;
-    padding: 0.25rem 0.7rem; margin: 0.3rem 0 0.6rem 0;
-    border: 1px solid var(--ff-border);
-}
-.ff-pill.on { color: var(--ff-accent) !important; }
-.ff-pill.on * { color: var(--ff-accent) !important; }
-.ff-pill.off { color: var(--ff-text-muted) !important; }
-.ff-pill.off * { color: var(--ff-text-muted) !important; }
-.ff-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-
-/* ---- Sidebar ---- */
-[data-testid="stSidebar"] {
-    background: var(--ff-surface) !important;
-    border-right: 1px solid var(--ff-border);
-}
-[data-testid="stSidebar"] * { color: var(--ff-text) !important; }
-.ff-nav-label {
-    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--ff-text-muted) !important; margin: 1rem 0 0.4rem 0; font-weight: 600;
-}
-.ff-crumb {
-    display: inline-flex; align-items: center; gap: 0.35rem;
-    background: var(--ff-surface-2); color: var(--ff-text) !important;
-    border: 1px solid var(--ff-border);
-    border-radius: 999px; padding: 0.2rem 0.65rem;
-    font-size: 0.78rem; font-weight: 500; margin: 0.2rem 0 0.5rem 0;
-}
-.ff-crumb * { color: var(--ff-text) !important; }
-
-/* Plain, flat buttons — no gradients, no shadows */
-div[data-testid="stButton"] button {
-    width: 100%;
-    text-align: left;
-    border-radius: var(--ff-radius);
-    border: 1px solid var(--ff-border);
-    background: var(--ff-surface) !important;
-    color: var(--ff-text) !important;
-    padding: 0.5rem 0.85rem;
-    font-size: 0.88rem;
-    font-weight: 400;
-    transition: border-color 0.12s ease, background 0.12s ease;
-    box-shadow: none !important;
-}
-div[data-testid="stButton"] button * { color: inherit !important; }
-div[data-testid="stButton"] button:hover {
-    border-color: var(--ff-accent);
-    background: var(--ff-surface-2) !important;
-    color: var(--ff-text) !important;
-    transform: none;
-}
-div[data-testid="stButton"] button[kind="primary"] {
-    background: var(--ff-accent) !important;
-    border-color: var(--ff-accent);
-    color: #171717 !important;
-}
-div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important; }
-
-/* Toolbar */
-.ff-toolbar div[data-testid="stButton"] button { font-weight: 500; }
-
-/* Suggestion chips */
-.ff-chip-row div[data-testid="stButton"] button {
-    border-radius: 999px;
+.ff-header {
     text-align: center;
+    padding: 0.5rem 0 1rem 0;
+}
+
+.ff-header-title {
+    font-size: 2.2rem;
+    font-weight: 800;
+    margin-bottom: 0.25rem;
+}
+
+.ff-header-subtitle {
+    font-size: 1rem;
+    opacity: 0.75;
+}
+
+
+/* ================================================================
+   SIDEBAR
+   ================================================================ */
+
+.ff-sidebar-title {
+    font-size: 1.5rem;
+    font-weight: 800;
+    margin-bottom: 0.2rem;
+}
+
+.ff-sidebar-subtitle {
+    font-size: 0.9rem;
+    opacity: 0.75;
+    margin-bottom: 1rem;
+}
+
+.ff-nav-label {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.65;
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.ff-crumb {
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.5rem;
+    background: rgba(128, 128, 128, 0.10);
+    font-weight: 700;
+    text-align: center;
+}
+
+.ff-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
     font-size: 0.8rem;
-    padding: 0.4rem 0.7rem;
+    margin: 0.5rem 0;
 }
 
-/* Guided-flow option list */
-.ff-option-row div[data-testid="stButton"] button { margin-bottom: 0.3rem; }
-.ff-back div[data-testid="stButton"] button {
-    width: auto; border: none; background: transparent !important;
-    color: var(--ff-text-muted) !important; font-size: 0.8rem; padding: 0.2rem 0.3rem;
+.ff-pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
 }
-.ff-back div[data-testid="stButton"] button:hover { color: var(--ff-text) !important; background: transparent !important; }
 
-/* ---- Chat messages: no card / bubble behind either side. Left/right
-   alignment plus a small colour difference is the only distinction,
-   the way a plain messaging thread reads. ---- */
+.ff-pill.on {
+    background: rgba(0, 180, 100, 0.10);
+}
+
+.ff-pill.on .dot {
+    background: #00a86b;
+}
+
+.ff-pill.off {
+    background: rgba(200, 100, 100, 0.10);
+}
+
+.ff-pill.off .dot {
+    background: #d9534f;
+}
+
+
+/* ================================================================
+   CHAT
+   ================================================================ */
+
 [data-testid="stChatMessage"] {
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    padding: 0.5rem 0;
-    gap: 0;
-}
-/* Hide the default avatar icons for a plain, minimal thread. */
-[data-testid="stChatMessageAvatarUser"], [data-testid="stChatMessageAvatarAssistant"] {
-    display: none !important;
+    border-radius: 12px;
 }
 
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-    justify-content: flex-end;
-}
-/* User's own messages: a rounded bubble that hugs its content and sits
-   flush right (Claude-style) -- NOT a full-width pill. Streamlit gives
-   stChatMessageContent "flex: 1 1 auto" by default (so long assistant
-   replies can wrap across the row), which is exactly why a short user
-   message was stretching edge-to-edge -- "flex: none" stops it growing
-   to fill the row, and width:fit-content + margin-left:auto then let it
-   shrink to the text and hug the right edge. The bubble itself uses a
-   muted neutral fill a shade lighter than the page background, with the
-   normal light text colour, rather than a loud accent fill. */
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
-    flex: none !important;
-    background: var(--ff-surface-2) !important;
-    color: var(--ff-text) !important;
-    max-width: 80% !important;
-    width: fit-content !important;
-    margin-left: auto !important;
-    padding: 0.6rem 1rem !important;
-    border-radius: 18px !important;
-}
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] * {
-    color: var(--ff-text) !important;
-    text-align: left;
-}
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] p {
-    margin: 0;
-}
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
-    background: transparent !important;
-    color: var(--ff-text-muted) !important;
-    padding: 0; max-width: 100%;
-}
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] p,
-[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] li {
-    color: var(--ff-text) !important;
-}
-
-/* Tables: horizontal scroll on small screens instead of squashing */
-[data-testid="stChatMessageContent"] table {
-    display: block; overflow-x: auto; white-space: nowrap;
-    border-collapse: collapse; font-size: 0.86rem; max-width: 100%;
-}
-[data-testid="stChatMessageContent"] th {
-    color: var(--ff-text-muted) !important; font-weight: 600;
-    text-align: left;
-}
-[data-testid="stChatMessageContent"] th, [data-testid="stChatMessageContent"] td {
-    padding: 0.4rem 0.65rem; border-bottom: 1px solid var(--ff-border);
-}
-[data-testid="stChatMessageContent"] a { color: var(--ff-accent) !important; font-weight: 500; text-decoration: underline; }
-
-/* ---- Fixed bottom chat-input bar ---- */
-[data-testid="stBottomBlockContainer"], [data-testid="stBottom"] {
-    background: linear-gradient(180deg, rgba(23,23,23,0), var(--ff-bg) 45%) !important;
-}
 [data-testid="stChatInput"] {
-    background: var(--ff-surface) !important;
-    border: 1px solid var(--ff-border) !important;
-    border-radius: 999px !important;
-    box-shadow: none !important;
+    margin-bottom: 0.5rem;
 }
-[data-testid="stChatInput"] textarea,
-div[data-baseweb="textarea"] textarea,
-[data-testid="stChatInput"] input {
-    color: #ECECEC !important;
-    -webkit-text-fill-color: #ECECEC !important;
-    caret-color: var(--ff-accent) !important;
-    opacity: 1 !important;
-    background: transparent !important;
-}
-[data-testid="stChatInput"] textarea::placeholder {
-    color: #8A8A8A !important;
-    -webkit-text-fill-color: #8A8A8A !important;
-    opacity: 1 !important;
-}
-[data-testid="stChatInput"] button {
-    background: var(--ff-accent) !important;
-    border-radius: 999px !important;
-}
-[data-testid="stChatInput"] button svg { fill: #171717 !important; color: #171717 !important; }
 
-/* ---- Expander (Example queries) ---- */
-[data-testid="stExpander"] {
-    background: var(--ff-surface) !important;
-    border: 1px solid var(--ff-border) !important;
-    border-radius: var(--ff-radius) !important;
+
+/* ================================================================
+   BOTTOM ACTION BUTTONS
+   ================================================================ */
+
+.ff-bottom-actions {
+    margin-top: 0.25rem;
+    margin-bottom: 1rem;
 }
-[data-testid="stExpander"] summary, [data-testid="stExpander"] p, [data-testid="stExpander"] li {
-    color: var(--ff-text) !important;
+
+.ff-bottom-actions button {
+    min-height: 42px;
 }
-[data-testid="stExpander"] code {
-    background: var(--ff-surface-2) !important; color: var(--ff-accent) !important;
-    border-radius: 6px; padding: 0.1rem 0.35rem;
+
+
+/* ================================================================
+   OPTION BUTTONS
+   ================================================================ */
+
+.ff-option-row {
+    margin-top: 0.5rem;
+    margin-bottom: 1rem;
 }
+
+
+/* ================================================================
+   MOBILE
+   ================================================================ */
+
+@media (max-width: 768px) {
+
+    .block-container {
+        padding-left: 0.8rem;
+        padding-right: 0.8rem;
+        padding-top: 0.8rem;
+    }
+
+    .ff-header-title {
+        font-size: 1.7rem;
+    }
+
+    .ff-header-subtitle {
+        font-size: 0.9rem;
+    }
+
+    .ff-bottom-actions button {
+        min-height: 46px;
+        font-size: 0.9rem;
+    }
+
+}
+
 </style>
 """
+
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------------
+# LOAD BOT
+# ---------------------------------------------------------------------
+
 @st.cache_resource(show_spinner="Loading fund dataset...")
 def load_bot() -> FinanceBot:
-    # Always the fixed, static dataset bundled with the app -- there is no
-    # way to point this at a different file or sheet at runtime.
+    """
+    Load the fixed/static fund dataset bundled with the application.
+    """
     return FinanceBot()
 
 
-def ask(prompt: str, llm_fallback) -> None:
-    """Push a user prompt through the bot and append both turns to chat history."""
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    answer = bot.respond(prompt, llm_fallback=llm_fallback)
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+try:
+    bot = load_bot()
 
-
-def queue_action(action: str) -> None:
-    """Queue a chat action to be resolved on the next run, before anything
-    else renders — this is what lets a tap anywhere (sidebar, toolbar,
-    chip, guided-flow button) show its result immediately."""
-    st.session_state.pending_action = action
-    st.rerun()
+except Exception as e:
+    st.error(f"Failed to load dataset: {e}")
+    st.stop()
 
 
 # ---------------------------------------------------------------------
-# Sidebar — desktop-friendly single-column category browser
+# SESSION STATE INITIALIZATION
 # ---------------------------------------------------------------------
-with st.sidebar:
-    st.markdown(
-        '<div class="ff-brand"><div class="ff-mark">FF</div>'
-        '<div class="ff-title">Mee fund selection baga amateurish ga undhi</div></div>'
-        '<div class="ff-sub">Nanu adugu nenu chebtha - MF Details</div>',
-        unsafe_allow_html=True,
-    )
-
-    try:
-        bot = load_bot()
-    except Exception as e:  # noqa: BLE001
-        st.error(f"Failed to load dataset: {e}")
-        st.stop()
-
-    st.caption(f"{bot.fund_count():,} funds loaded")
-
-    llm_fallback = get_llm_fallback()
-    if llm_fallback:
-        st.markdown('<div class="ff-pill on"><span class="dot"></span>General Q&A enabled</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="ff-pill off"><span class="dot"></span>General Q&A off</div>', unsafe_allow_html=True)
-        st.caption("Set GROQ_API_KEY to enable free-form finance questions.")
-
-    if st.button("Clear chat", use_container_width=True):
-        bot.pending = None
-        st.session_state.messages = []
-        st.session_state.selected_asset_type = None
-        st.session_state.selected_subcat = None
-        st.session_state.pending_action = None
-        st.session_state.pending_back = False
-        st.rerun()
-
-    if "selected_asset_type" not in st.session_state:
-        st.session_state.selected_asset_type = None
-    if "selected_subcat" not in st.session_state:
-        st.session_state.selected_subcat = None
-
-    st.markdown('<div class="ff-nav-label">Browse by category</div>', unsafe_allow_html=True)
-
-    if st.session_state.selected_asset_type is None:
-        # --- Step 1: Asset Type ---
-        for atype in bot.asset_types:
-            if st.button(atype, key=f"asset_{atype}", use_container_width=True):
-                st.session_state.selected_asset_type = atype
-                st.session_state.selected_subcat = None
-                st.rerun()
-    else:
-        # --- Step 2: Sub Category, with a breadcrumb back to step 1 ---
-        atype = st.session_state.selected_asset_type
-        crumb_cols = st.columns([4, 2])
-        with crumb_cols[0]:
-            st.markdown(f'<div class="ff-crumb">{atype}</div>', unsafe_allow_html=True)
-        with crumb_cols[1]:
-            if st.button("Change", key="asset_change", use_container_width=True):
-                st.session_state.selected_asset_type = None
-                st.rerun()
-
-        # Labels shown here have both the "Close/Open Ended Schemes"
-        # wrapper AND the redundant Asset-Type scheme prefix (e.g.
-        # "Equity Scheme - ") stripped, since the Asset Type is already
-        # implied by this list (see subcat_browse_label). The raw
-        # dataset value is still what gets sent to the bot when clicked,
-        # so matching stays exact.
-        subcats = bot.asset_type_to_subcats.get(atype, [])
-        for sc in subcats:
-            if st.button(subcat_browse_label(sc), key=f"subcat_{sc}", use_container_width=True):
-                st.session_state.selected_subcat = sc
-                st.rerun()
-
-# ---------------------------------------------------------------------
-# Main chat area
-# ---------------------------------------------------------------------
-st.markdown(
-    '<div class="ff-brand"><div class="ff-mark">FF</div>'
-    '<div class="ff-title">Ask I say, Ask me </div></div>'
-    '<div class="ff-sub">Top performing Mutual funds.</div>',
-    unsafe_allow_html=True,
-)
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {
             "role": "assistant",
             "content": (
-    "⚠️ **Disclaimer:**\n\n The fund rankings, scores, and analytics shown here are "
-    "generated using our own research and calculations based primarily on approximately "
-    "the last **3 years of historical NAV data** and other publicly available information. "
-    "These results are **for informational and educational purposes only** and **do not "
-    "constitute financial, investment, tax, or legal advice**. Past performance does not "
-    "guarantee future returns. Please conduct your own research and consult a qualified "
-    "financial advisor before making any investment decisions.\n\n"
-    "**We are not responsible "
-    "for any financial losses or investment decisions made based on this analysis.**"
+                "⚠️ **Disclaimer:**\n\n"
+                "The fund rankings, scores, and analytics shown here are "
+                "generated using our own research and calculations based "
+                "primarily on approximately the last **3 years of historical "
+                "NAV data** and other publicly available information.\n\n"
+                
+                "These results are **for informational and educational "
+                "purposes only** and **do not constitute financial, "
+                "investment, tax, or legal advice**.\n\n"
+                
+                "Past performance does not guarantee future returns. "
+                "Please conduct your own research and consult a qualified "
+                "financial advisor before making any investment decisions.\n\n"
+                
+                "**We are not responsible for any financial losses or "
+                "investment decisions made based on this analysis.**"
             ),
         }
     ]
+
+
+if "selected_asset_type" not in st.session_state:
+    st.session_state.selected_asset_type = None
+
+
+if "selected_subcat" not in st.session_state:
+    st.session_state.selected_subcat = None
+
+
 if "pending_action" not in st.session_state:
     st.session_state.pending_action = None
+
+
 if "pending_back" not in st.session_state:
     st.session_state.pending_back = False
 
-# --- Resolve any queued action first, before anything else renders. ---
-if st.session_state.pending_action:
-    action = st.session_state.pending_action
+
+# ---------------------------------------------------------------------
+# LLM FALLBACK
+# ---------------------------------------------------------------------
+
+llm_fallback = get_llm_fallback()
+
+
+# ---------------------------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------------------------
+
+def ask(prompt: str, llm_fallback) -> None:
+    """
+    Push a user prompt through the bot and append both turns
+    to chat history.
+    """
+
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": prompt,
+        }
+    )
+
+    answer = bot.respond(
+        prompt,
+        llm_fallback=llm_fallback,
+    )
+
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": answer,
+        }
+    )
+
+
+def queue_action(action: str) -> None:
+    """
+    Queue a chat action to be resolved on the next Streamlit run.
+
+    This allows sidebar buttons, toolbar buttons, chips and guided
+    buttons to behave consistently.
+    """
+
+    st.session_state.pending_action = action
+    st.rerun()
+
+
+def clear_chat() -> None:
+    """
+    Reset the conversation and all category selections.
+    """
+
+    bot.pending = None
+
+    st.session_state.messages = []
+
+    st.session_state.selected_asset_type = None
+    st.session_state.selected_subcat = None
+
     st.session_state.pending_action = None
-    if action == "__browse__":
-        bot.pending = None
-        st.session_state.messages.append({"role": "assistant", "content": bot.start_asset_type_flow()})
+    st.session_state.pending_back = False
+
+    st.rerun()
+
+
+# ---------------------------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------------------------
+
+with st.sidebar:
+
+    st.markdown(
+        """
+        <div class="ff-sidebar-title">
+            📈 FundGPT
+        </div>
+
+        <div class="ff-sidebar-subtitle">
+            Mee fund selection baga amateurish ga undhi.<br>
+            Nanu adugu — nenu chebtha.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.caption(
+        f"{bot.fund_count():,} funds loaded"
+    )
+
+    # LLM status
+    if llm_fallback:
+
+        st.markdown(
+            """
+            <div class="ff-pill on">
+                <span class="dot"></span>
+                General Q&A enabled
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     else:
-        ask(action, llm_fallback)
+
+        st.markdown(
+            """
+            <div class="ff-pill off">
+                <span class="dot"></span>
+                General Q&A off
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.caption(
+            "Set GROQ_API_KEY to enable free-form finance questions."
+        )
+
+    # Sidebar clear button
+    if st.button(
+        "Clear chat",
+        key="clear_sidebar",
+        use_container_width=True,
+    ):
+        clear_chat()
+
+    st.markdown(
+        '<div class="ff-nav-label">Browse by category</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ---------------------------------------------------------------
+    # STEP 1 — ASSET TYPE
+    # ---------------------------------------------------------------
+
+    if st.session_state.selected_asset_type is None:
+
+        for atype in bot.asset_types:
+
+            if st.button(
+                atype,
+                key=f"asset_{atype}",
+                use_container_width=True,
+            ):
+
+                st.session_state.selected_asset_type = atype
+                st.session_state.selected_subcat = None
+
+                st.rerun()
+
+    # ---------------------------------------------------------------
+    # STEP 2 — SUB CATEGORY
+    # ---------------------------------------------------------------
+
+    else:
+
+        atype = st.session_state.selected_asset_type
+
+        crumb_cols = st.columns([4, 2])
+
+        with crumb_cols[0]:
+
+            st.markdown(
+                f'<div class="ff-crumb">{atype}</div>',
+                unsafe_allow_html=True,
+            )
+
+        with crumb_cols[1]:
+
+            if st.button(
+                "Change",
+                key="asset_change",
+                use_container_width=True,
+            ):
+
+                st.session_state.selected_asset_type = None
+                st.session_state.selected_subcat = None
+
+                st.rerun()
+
+        subcats = bot.asset_type_to_subcats.get(
+            atype,
+            [],
+        )
+
+        for sc in subcats:
+
+            if st.button(
+                subcat_browse_label(sc),
+                key=f"subcat_{sc}",
+                use_container_width=True,
+            ):
+
+                st.session_state.selected_subcat = sc
+
+                st.rerun()
+
+
+# ---------------------------------------------------------------------
+# MAIN HEADER
+# ---------------------------------------------------------------------
+
+st.markdown(
+    """
+    <div class="ff-header">
+
+        <div class="ff-header-title">
+            📈 FundGPT
+        </div>
+
+        <div class="ff-header-subtitle">
+            Ask me anything about Mutual Funds
+        </div>
+
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ---------------------------------------------------------------------
+# RESOLVE QUEUED ACTION
+# ---------------------------------------------------------------------
+
+if st.session_state.pending_action:
+
+    action = st.session_state.pending_action
+
+    st.session_state.pending_action = None
+
+    if action == "**browse**":
+
+        bot.pending = None
+
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": bot.start_asset_type_flow(),
+            }
+        )
+
+    else:
+
+        ask(
+            action,
+            llm_fallback,
+        )
+
+
+# ---------------------------------------------------------------------
+# HANDLE BACK ACTION
+# ---------------------------------------------------------------------
 
 if st.session_state.pending_back:
+
     st.session_state.pending_back = False
-    bot.pending = None
-    st.session_state.messages.append({"role": "assistant", "content": bot.start_asset_type_flow()})
 
-# If a Sub Category button was just clicked in the sidebar, resolve it
-# (best-match against the fixed dataset) and inject the result as a chat turn.
+    bot.pending = None
+
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": bot.start_asset_type_flow(),
+        }
+    )
+
+
+# ---------------------------------------------------------------------
+# HANDLE SIDEBAR SUB CATEGORY SELECTION
+# ---------------------------------------------------------------------
+
 if st.session_state.get("selected_subcat"):
+
     subcat_query = st.session_state.selected_subcat
-    st.session_state.selected_subcat = None  # consume it so it only fires once
-    bot.pending = None
-    ask(f"top 10 funds in {subcat_query}", llm_fallback)
 
-# If a fund name link was just clicked in a table (e.g. "?fund=<name>"),
-# treat it exactly like the user typing "tell me about <name>" and clear
-# the query param so it doesn't refire on the next rerun.
+    # Consume selection
+    st.session_state.selected_subcat = None
+
+    bot.pending = None
+
+    ask(
+        f"top 10 funds in {subcat_query}",
+        llm_fallback,
+    )
+
+
+# ---------------------------------------------------------------------
+# HANDLE FUND LINK QUERY PARAMETER
+# ---------------------------------------------------------------------
+
 if st.query_params.get("fund"):
+
     fund_query = st.query_params["fund"]
+
+    # Prevent the same query from firing again
     st.query_params.clear()
+
     bot.pending = None
-    ask(f"tell me about {fund_query}", llm_fallback)
 
-# --- Toolbar: always-visible, works without ever opening the sidebar. ---
-st.markdown('<div class="ff-toolbar">', unsafe_allow_html=True)
-tb1, tb2 = st.columns(2)
-with tb1:
-    if st.button("Browse by category", use_container_width=True):
-        queue_action("__browse__")
-with tb2:
-    if st.button("Clear chat", key="clear_main", use_container_width=True):
-        bot.pending = None
-        st.session_state.messages = []
-        st.session_state.selected_asset_type = None
-        st.session_state.selected_subcat = None
-        st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
+    ask(
+        f"tell me about {fund_query}",
+        llm_fallback,
+    )
 
-# --- Chat history ---
+
+# ---------------------------------------------------------------------
+# CHAT HISTORY
+# ---------------------------------------------------------------------
+
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"], unsafe_allow_html=True)
 
-# --- Guided Asset Type -> Sub Category flow rendered as real tap targets,
-#     right under the assistant's question, so it works identically on
-#     phone and desktop without needing the sidebar. ---
+    with st.chat_message(msg["role"]):
+
+        st.markdown(
+            msg["content"],
+            unsafe_allow_html=True,
+        )
+
+
+# ---------------------------------------------------------------------
+# GUIDED ASSET TYPE → SUB CATEGORY FLOW
+# ---------------------------------------------------------------------
+
 payload = bot.pending_options_payload()
+
+
 if payload:
+
     stage = bot.pending["stage"]
+
+    # ---------------------------------------------------------------
+    # SUB CATEGORY SCREEN
+    # ---------------------------------------------------------------
+
     if stage == "await_sub_category":
-        st.markdown('<div class="ff-back">', unsafe_allow_html=True)
-        if st.button("← Change asset type", key="ff_back"):
+
+        st.markdown(
+            "",
+            unsafe_allow_html=True,
+        )
+
+        if st.button(
+            "← Change asset type",
+            key="ff_back",
+            use_container_width=True,
+        ):
+
             st.session_state.pending_back = True
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="ff-option-row">', unsafe_allow_html=True)
+        st.markdown(
+            "",
+            unsafe_allow_html=True,
+        )
+
+    # ---------------------------------------------------------------
+    # OPTION BUTTONS
+    # ---------------------------------------------------------------
+
+    st.markdown(
+        '<div class="ff-option-row">',
+        unsafe_allow_html=True,
+    )
+
     for opt in payload:
-        if st.button(opt["label"], key=f"ff_opt_{stage}_{opt['index']}", use_container_width=True):
-            queue_action(opt["value"])
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Quick-start suggestion chips, shown only at the start of a fresh chat. ---
+        if st.button(
+            opt["label"],
+            key=f"ff_opt_{stage}_{opt['index']}",
+            use_container_width=True,
+        ):
+
+            queue_action(
+                opt["value"]
+            )
+
+    st.markdown(
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------
+# QUICK START SUGGESTIONS
+# ---------------------------------------------------------------------
+
 elif len(st.session_state.messages) <= 1:
-    st.markdown('<div class="ff-nav-label">Try asking</div>', unsafe_allow_html=True)
-    st.markdown('<div class="ff-chip-row">', unsafe_allow_html=True)
+
+    st.markdown(
+        "### Try asking",
+    )
+
     chip_queries = [
         "Top 10 funds in Large Cap Fund",
         "Best funds in ELSS",
         "Top 5 Corporate Bond funds",
         "Tell me about HDFC Flexi Cap Fund",
     ]
-    chip_cols = st.columns(len(chip_queries))
-    for col, q in zip(chip_cols, chip_queries):
-        with col:
-            if st.button(q, key=f"chip_{q}", use_container_width=True):
-                queue_action(q)
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Free-form input, always available at the bottom. Routed through the
-#     same queue_action() + rerun() pattern as every other entry point
-#     (sidebar, toolbar, chips, guided-flow buttons) -- NOT rendered
-#     inline here. Rendering inline would show the assistant's text
-#     answer immediately, but any guided-flow buttons the answer implies
-#     (e.g. "a few funds match X, which one?") are drawn by the payload
-#     block ABOVE this one in the script, which would already have run
-#     with the OLD pending state and so would show no buttons at all
-#     until some unrelated rerun happened to catch up. ---
-if prompt := st.chat_input("Ask about a fund or a category..."):
+    chip_cols = st.columns(
+        len(chip_queries)
+    )
+
+    for col, query in zip(
+        chip_cols,
+        chip_queries,
+    ):
+
+        with col:
+
+            if st.button(
+                query,
+                key=f"chip_{query}",
+                use_container_width=True,
+            ):
+
+                queue_action(query)
+
+
+# ---------------------------------------------------------------------
+# CHAT INPUT
+# ---------------------------------------------------------------------
+
+if prompt := st.chat_input(
+    "Ask about a fund or a category..."
+):
+
     queue_action(prompt)
 
-with st.expander("Example queries"):
+
+# ---------------------------------------------------------------------
+# BOTTOM ACTION BAR
+# ---------------------------------------------------------------------
+#
+# IMPORTANT:
+# These buttons intentionally appear AFTER st.chat_input().
+# Therefore they are visually positioned below the text box.
+# ---------------------------------------------------------------------
+
+st.markdown(
+    '<div class="ff-bottom-actions">',
+    unsafe_allow_html=True,
+)
+
+bottom_col1, bottom_col2 = st.columns(2)
+
+
+with bottom_col1:
+
+    if st.button(
+        "📂 Browse by category",
+        key="browse_bottom",
+        use_container_width=True,
+    ):
+
+        queue_action("**browse**")
+
+
+with bottom_col2:
+
+    if st.button(
+        "🗑️ Clear chat",
+        key="clear_bottom",
+        use_container_width=True,
+    ):
+
+        clear_chat()
+
+
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+
+# ---------------------------------------------------------------------
+# EXAMPLE QUERIES
+# ---------------------------------------------------------------------
+
+with st.expander(
+    "💡 Example queries"
+):
+
     st.markdown(
         "\n".join(
             [
