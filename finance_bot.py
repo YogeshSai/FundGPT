@@ -65,16 +65,19 @@ def _data_path() -> str:
 # ----------------------------------------------------------------------
 # Column groupings used for pretty-printing a fund's full profile
 # ----------------------------------------------------------------------
+# NOTE: these are kept in sync with the actual columns produced by
+# mf_risk_metrics.py. There is no TER / cost data in that workbook, so
+# there is deliberately no "Costs" section here -- rendering one would
+# just show blank/"--" rows for every fund.
 
 BASIC_COLS = [
     "Scheme Code", "Scheme Name", "AMC (Fund House)", "Sub Category",
     "Asset Class", "ELSS", "Latest NAV Date", "Latest NAV",
 ]
-COST_COLS = ["TER (%)", "TER_Regular (%)", "TER_Direct (%)"]
 
-HORIZONS = ["6M", "1Y", "3Y", "5Y"]
+HORIZONS = ["1D", "1W", "1M", "6M", "1Y", "3Y", "5Y", "10Y", "SI"]
 METRIC_SUFFIXES = [
-    "CAGR", "Volatility", "MaxDrawdown", "Sharpe", "Sortino",
+    "AbsoluteReturn", "CAGR", "Volatility", "MaxDrawdown", "Sharpe", "Sortino",
     "DownsideDev", "VaR95", "Calmar", "RollMean", "RollMin", "RollMax",
 ]
 PEER_PCTILE_COLS = [
@@ -88,10 +91,10 @@ TOP_N_TABLE_COLS = [
     "Scheme Name", "1Y_CAGR", "3Y_CAGR", "5Y_CAGR", "Peer_Rank",
 ]
 
-# Columns shown in the chat's Top-N table. AMC, 3Y Sharpe, TER, and
-# Composite Score are deliberately left out here -- they're already shown
-# when the user opens a specific fund's full profile, so repeating them in
-# the summary table is redundant.
+# Columns shown in the chat's Top-N table. AMC, 3Y Sharpe, and Composite
+# Score are deliberately left out here -- they're already shown when the
+# user opens a specific fund's full profile, so repeating them in the
+# summary table is redundant.
 TOP_N_DISPLAY_COLS = ["Scheme Name", "1Y_CAGR", "3Y_CAGR", "5Y_CAGR", "Peer_Rank"]
 
 # Underscore-free display headers for the Top-N table.
@@ -108,6 +111,7 @@ TOP_N_COL_LABELS = {
 PERCENT_COLS = {"1Y_CAGR", "3Y_CAGR", "5Y_CAGR"}
 
 FRIENDLY_LABELS = {
+    "AbsoluteReturn": "Absolute Return",
     "CAGR": "CAGR (Annualised Return)",
     "Volatility": "Volatility (Std. Dev.)",
     "MaxDrawdown": "Max Drawdown",
@@ -119,7 +123,7 @@ FRIENDLY_LABELS = {
     "RollMean": "Rolling Return (Mean)",
     "RollMin": "Rolling Return (Min)",
     "RollMax": "Rolling Return (Max)",
-    
+
 }
 
 # Minimum similarity score (0-1) required to auto-accept a free-text
@@ -428,14 +432,6 @@ class FinanceBot:
                 out.append(f"| {c} | {fmt(row[c], is_subcat_field=(c == 'Sub Category'))} |")
         out.append("")
 
-        out.append("**Costs**")
-        out.append("| Field | Value |")
-        out.append("|---|---|")
-        for c in COST_COLS:
-            if c in row.index:
-                out.append(f"| {c} | {fmt(row[c])} |")
-        out.append("")
-
         for horizon in HORIZONS:
             present = [f"{horizon}_{s}" for s in METRIC_SUFFIXES if f"{horizon}_{s}" in row.index]
             if not present:
@@ -446,7 +442,8 @@ class FinanceBot:
             for c in present:
                 suffix = c.split("_", 1)[1]
                 label = FRIENDLY_LABELS.get(suffix, suffix)
-                out.append(f"| {label} | {fmt(row[c], is_percent=(suffix == 'CAGR'))} |")
+                is_pct = suffix in ("AbsoluteReturn", "CAGR")
+                out.append(f"| {label} | {fmt(row[c], is_percent=is_pct)} |")
             out.append("")
 
         pctile_present = [c for c in PEER_PCTILE_COLS if c in row.index]
@@ -472,23 +469,13 @@ class FinanceBot:
     # ------------------------------------------------------------------
     # Guided "Asset Type -> Sub Category" flow
     # ------------------------------------------------------------------
-    def _render_options_table(
-        self, options: list[str], heading: str, clean: bool = False
-    ) -> str:
-        """Render a numbered options list as a single markdown table
-        (instead of a bracketed '[1] ... [2] ...' list). If `clean` is
-        True, each option's display text is passed through
-        `clean_subcat_label` first (used for Sub Category options)."""
-        lines = [f"### {heading}\n"]
-        lines.append("| # | Option |")
-        lines.append("|---|---|")
-        for i, opt in enumerate(options, start=1):
-            label = clean_subcat_label(opt) if clean else opt
-            lines.append(f"| {i} | {label} |")
-        lines.append(
-            "\n_Tap an option in the panel, or reply with its number or name._"
-        )
-        return "\n".join(lines)
+    def _render_prompt(self, heading: str) -> str:
+        """Just the guided-flow question text -- no options list. The
+        actual choices are rendered as real tappable buttons right below
+        this message (see pending_options_payload() / app.py's button
+        row), so repeating them here as a markdown table would just show
+        every option twice."""
+        return f"### {heading}\n\n_Tap an option below, or reply with its number or name._"
 
     def pending_options_payload(self) -> list[dict] | None:
         """Structured version of the current pending options, meant for a
@@ -513,9 +500,7 @@ class FinanceBot:
 
     def start_asset_type_flow(self) -> str:
         self.pending = {"stage": "await_asset_type", "options": self._asset_types}
-        return self._render_options_table(
-            self._asset_types, "Which Asset Type are you interested in?"
-        )
+        return self._render_prompt("Which Asset Type are you interested in?")
 
     def _resolve_choice(self, query: str, options: list[str]) -> str | None:
         """Resolve a user's reply against an option list: by index or by
@@ -543,7 +528,7 @@ class FinanceBot:
             if choice is None:
                 return (
                     "I didn't quite catch that. " +
-                    self._render_options_table(self.pending["options"], "Please pick an Asset Type")
+                    self._render_prompt("Please pick an Asset Type")
                 )
             subcats = self._asset_type_to_subcats.get(choice, [])
             self.pending = {
@@ -554,9 +539,7 @@ class FinanceBot:
             if not subcats:
                 self.pending = None
                 return f"No Sub Categories found under **{choice}**."
-            return self._render_options_table(
-                subcats, f"Great — within {choice}, which Sub Category?", clean=True
-            )
+            return self._render_prompt(f"Great — within {choice}, which Sub Category?")
 
         if stage == "await_sub_category":
             options = self.pending["options"]
@@ -568,7 +551,7 @@ class FinanceBot:
                 if choice is None or score < SUBCAT_MATCH_THRESHOLD:
                     return (
                         "I didn't quite catch that. " +
-                        self._render_options_table(options, "Please pick a Sub Category", clean=True)
+                        self._render_prompt("Please pick a Sub Category")
                     )
             self.pending = None
             return self.format_top_funds(choice, n=10)
