@@ -55,9 +55,19 @@ html, body { color-scheme: dark !important; }
 }
 
 .main .block-container {
-    max-width: 780px;
+    /* Previously capped at 780px and auto-centered, which is why the
+       user bubble -- flush to the *right edge of that 780px column* --
+       still landed visually near the middle of the browser window on
+       any screen wider than ~780px+sidebar. Removing the cap lets the
+       block-container fill the actual main content pane (the area next
+       to the sidebar), so margin-left:auto on the bubble now hugs the
+       real right edge of the screen instead of the edge of a narrow
+       centered column. */
+    max-width: 100%;
     padding-top: 1.4rem;
     padding-bottom: 7.5rem;
+    padding-left: 1.6rem;
+    padding-right: 1.6rem;
 }
 
 @media (max-width: 680px) {
@@ -208,7 +218,11 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] {
     background: transparent !important;
     color: var(--ff-text-muted) !important;
-    padding: 0; max-width: 100%;
+    padding: 0;
+    /* Independent of the now-unconstrained block-container: keep bot
+       replies at a comfortable reading width instead of stretching
+       edge-to-edge on wide screens. */
+    max-width: 780px;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] p,
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) [data-testid="stChatMessageContent"] li {
