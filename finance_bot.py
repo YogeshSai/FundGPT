@@ -397,9 +397,17 @@ def _normalize_category_text(text: str) -> str:
     fallback in detect_intent(), which then confidently (and wrongly)
     matched a specific fund whose name happened to contain 'Large' and
     'Cap' and 'Fund', instead of showing the Large Cap Fund category list.
+
+    Also splits a market-cap size word run into 'midcap' -> 'mid cap'
+    etc. so a no-space query still tokenizes the same way the dataset's
+    "<Size> Cap Fund" labels do -- the token-set comparison in
+    best_sub_category_match() otherwise sees one unmatched 'midcap' token
+    instead of the two tokens ('mid', 'cap') it needs to line up against
+    the category label, and silently scores too low to match at all.
     """
     t = str(text or "").lower().strip()
     t = re.sub(r"\bfunds\b", "fund", t)
+    t = re.sub(r"\b(large|mid|small|multi|flexi)cap\b", r"\1 cap", t)
     words = t.split(" ")
     for i, w in enumerate(words):
         if w and w != "fund" and 3 <= len(w) <= 6 and fuzz.ratio(w, "fund") >= 65:
@@ -407,6 +415,25 @@ def _normalize_category_text(text: str) -> str:
     t = " ".join(words)
     t = re.sub(r"\s+", " ", t).strip()
     return t
+
+# Generic wrapper/connective words stripped out before comparing a query's
+# words against a category label's words in best_sub_category_match()'s
+# substring boost -- these appear in most/all cap-size (and debt/hybrid)
+# category labels, so they carry no distinguishing signal and would
+# otherwise let two DIFFERENT categories that both happen to contain the
+# query as a literal substring (e.g. "mid cap" is a substring of both
+# "Mid Cap Fund" and "Large & Mid Cap Fund") tie at the same flat boost.
+_CATEGORY_BOILERPLATE_WORDS = {
+    "equity", "debt", "hybrid", "scheme", "schemes", "open", "ended", "fund",
+}
+
+
+def _category_core_tokens(label_l: str) -> set[str]:
+    return {
+        w for w in re.findall(r"[a-z0-9]+", label_l)
+        if w not in _CATEGORY_BOILERPLATE_WORDS
+    }
+
 
 
 # ----------------------------------------------------------------------
@@ -787,11 +814,31 @@ class FinanceBot:
                 continue
 
             score = fuzzy_ratio(q, label_l)
-            # Boost substring matches (e.g. "large cap" inside "Large Cap
-            # Fund", or "small cap fund" -- after pluralization is
-            # normalized above -- inside "Small Cap Fund").
+            # Boost substring / core-word matches (e.g. "large cap" inside
+            # "Large Cap Fund", or "small cap fund" -- after pluralization
+            # is normalized above -- inside "Small Cap Fund"). Scaled by
+            # how much of the label's own distinguishing (non-boilerplate)
+            # vocabulary the query actually covers -- a flat boost here
+            # previously gave "Mid Cap Fund" and "Large & Mid Cap Fund"
+            # the exact same score for a "mid cap" query (it's a literal
+            # substring of both), so the tie silently fell to whichever
+            # category happened to come first in the dataset instead of
+            # the one that's actually the better match.
+            q_tokens = set(re.findall(r"[a-z0-9]+", q))
+            q_core = q_tokens - _CATEGORY_BOILERPLATE_WORDS
+            core_tokens = _category_core_tokens(label_l)
+            if core_tokens and q_core:
+                overlap = q_core & core_tokens
+                if overlap:
+                    jaccard = len(overlap) / len(q_core | core_tokens)
+                    coverage = len(overlap) / len(core_tokens)
+                    if q_core <= core_tokens or coverage >= 0.5:
+                        score = max(score, 0.6 + 0.35 * jaccard)
+            # Lower-confidence fallback boost for the plain substring case,
+            # in case tokenization (hyphens, "&", etc.) kept the two sides
+            # from lining up as cleanly as the core-token check above wants.
             if q in label_l or label_l.replace(" fund", "").strip() in q:
-                score = max(score, 0.85)
+                score = max(score, 0.7)
 
             if score > best_score:
                 best_sc, best_score = sc, score
