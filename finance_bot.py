@@ -483,6 +483,22 @@ class FinanceBot:
             self._asset_types = ["All Funds"]
             self._asset_type_to_subcats = {"All Funds": self._sub_categories}
 
+        # Known AMC / fund-house "first words" (e.g. "hdfc" from "HDFC
+        # Mutual Fund", "sbi" from "SBI Funds Management", "icici" from
+        # "ICICI Prudential", ...), built from the dataset itself so it's
+        # never a guessed/hardcoded list. Used by _extract_amc_and_rest()
+        # to recognize and strip an AMC name off the front of a category
+        # query -- e.g. "HDFC Small cap funds" -- before fuzzy-matching
+        # the Sub Category, so "HDFC" doesn't dilute that match (or, if
+        # matching ever fell through to fund-name search, get picked up
+        # as random noise and match some unrelated fund by coincidence).
+        self._amc_first_words: set[str] = set()
+        if "AMC (Fund House)" in df.columns:
+            for amc in df["AMC (Fund House)"].dropna().astype(str).unique():
+                first = amc.strip().split(" ", 1)[0].lower()
+                if len(first) >= 3:  # skip very short tokens -- too prone to false positives
+                    self._amc_first_words.add(first)
+
     @property
     def sub_categories(self) -> list[str]:
         return self._sub_categories
