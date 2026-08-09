@@ -5,7 +5,7 @@ Core logic for FundGPT: an AI-powered mutual fund analytics chatbot.
 
 Responsibilities:
   1. Load & validate the fund dataset from the fixed local file
-     "MF_Risk_Metrics_1.xlsx" (sheet "Risk Metrics"), located in the same
+     "MF_Risk_Metrics.xlsx" (sheet "Risk Metrics"), located in the same
      folder as this script. This is the ONLY data source the bot will ever
      read from -- there is no upload path, and the loader does not accept
      an alternate file or sheet name.
