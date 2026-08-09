@@ -302,8 +302,8 @@ def queue_action(action: str) -> None:
 with st.sidebar:
     st.markdown(
         '<div class="ff-brand"><div class="ff-mark">FF</div>'
-        '<div class="ff-title">Nellore Pedda Reddy ki teliyani funds ah?</div></div>'
-        '<div class="ff-sub">Indian Mutual Fund analytics</div>',
+        '<div class="ff-title">Mee fund selection baga amateurish ga undhi</div></div>'
+        '<div class="ff-sub">Nenu chebtha theesuko - MF analysis</div>',
         unsafe_allow_html=True,
     )
 
