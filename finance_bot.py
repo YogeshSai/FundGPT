@@ -178,7 +178,16 @@ FRIENDLY_LABELS = {
 
 # Minimum similarity score (0-1) required to auto-accept a free-text
 # Sub Category match without falling back to the guided button flow.
-SUBCAT_MATCH_THRESHOLD = 0.35
+#
+# NOTE: this used to be 0.35, which is far too low for token_sort_ratio
+# on short strings -- plain conversational words with no category intent
+# at all were scoring above it purely by coincidental shared letters,
+# e.g. "who" vs "Growth" ~0.44 and "clear" vs "Income" ~0.36, both of
+# which silently returned a top-funds table instead of falling through
+# to "unknown"/LLM fallback. Genuine (even typo'd) category queries score
+# much higher -- "smal cap" vs "Small Cap Fund" ~0.73, "incom" vs
+# "Income" ~0.91 -- so 0.6 comfortably keeps those while rejecting noise.
+SUBCAT_MATCH_THRESHOLD = 0.6
 
 # ----------------------------------------------------------------------
 # Sub Category canonicalization -- merge known duplicate raw spellings
