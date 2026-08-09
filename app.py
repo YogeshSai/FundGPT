@@ -12,8 +12,6 @@ Run:
     streamlit run app.py
 """
 
-import time
-
 import streamlit as st
 
 from finance_bot import FinanceBot, subcat_browse_label
@@ -376,12 +374,11 @@ div[data-baseweb="textarea"] textarea,
 }
 [data-testid="stChatInput"] button svg { fill: #171717 !important; color: #171717 !important; }
 
-/* ---- Loading splash overlay: full-viewport, shown at the top of every
-   script run (see the unconditional st.empty() block below) and cleared
-   right after load_bot() resolves -- so every browser refresh (and, as a
-   side effect, every other rerun too, since Streamlit can't distinguish
-   the two from pure Python) gets the same intentional loading moment
-   instead of a half-drawn page. ---- */
+/* ---- First-load splash screen: full-viewport overlay shown only while
+   the fund dataset is loading for the very first time this session (see
+   the st.session_state guard below) -- covers the sidebar/chat while
+   FinanceBot() parses the workbook so the user sees an intentional
+   loading moment instead of a half-drawn page. ---- */
 .ff-loading-screen {
     position: fixed;
     inset: 0;
@@ -414,28 +411,20 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # <img> straight at the underlying .gif asset).
 _LOADING_GIF_URL = "https://media1.tenor.com/m/Dpc_QB5RBW0AAAAC/uppi-kannada.gif"
 
-# Shown at the top of every single script run -- NOT gated behind a
-# "seen it once this session" flag. The cache-busting query param forces
-# the browser to treat the <img> as a brand-new element each run, so the
-# gif actually restarts playing from frame one instead of a stale frame
-# just sitting there.
-_splash_start = time.time()
-_loading_placeholder = st.empty()
-_loading_placeholder.markdown(
-    f'<div class="ff-loading-screen">'
-    f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}?t={int(_splash_start * 1000)}" alt="Loading" />'
-    f'<div class="ff-loading-text">Loading fund data…</div>'
-    f'</div>',
-    unsafe_allow_html=True,
-)
-
-# Minimum time the splash stays on screen. st.cache_resource makes
-# load_bot() return almost instantly after the very first process-wide
-# load, so without this floor the placeholder gets created and wiped in
-# the same script run -- often faster than the browser gets a chance to
-# paint it, which is why it can look like the gif "never shows" even
-# though the code path is running every time.
-_MIN_SPLASH_SECONDS = 1.2
+# Shown once per browser session -- st.cache_resource already makes
+# load_bot() itself fast after the very first load process-wide, but a
+# NEW session still deserves to see the loading moment rather than the
+# splash silently never appearing again after the server's first user.
+_loading_placeholder = None
+if "app_ready" not in st.session_state:
+    _loading_placeholder = st.empty()
+    _loading_placeholder.markdown(
+        f'<div class="ff-loading-screen">'
+        f'<img class="ff-loading-gif" src="{_LOADING_GIF_URL}" alt="Loading" />'
+        f'<div class="ff-loading-text">Loading fund data…</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 @st.cache_resource(show_spinner="Loading fund dataset...")
@@ -477,14 +466,9 @@ with st.sidebar:
         st.error(f"Failed to load dataset: {e}")
         st.stop()
 
-    # Dataset is ready -- hold the splash open for the remainder of the
-    # minimum duration (usually the full 1.2s, since the cached load_bot()
-    # call above returns almost instantly) so it's actually perceptible,
-    # then dismiss it for this run.
-    _elapsed = time.time() - _splash_start
-    if _elapsed < _MIN_SPLASH_SECONDS:
-        time.sleep(_MIN_SPLASH_SECONDS - _elapsed)
-    _loading_placeholder.empty()
+    if _loading_placeholder is not None:
+        _loading_placeholder.empty()
+        st.session_state.app_ready = True
 
     st.caption(f"{bot.fund_count():,} funds loaded")
 
