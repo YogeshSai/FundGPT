@@ -184,7 +184,10 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
    to fill the row, and width:fit-content + margin-left:auto then let it
    shrink to the text and hug the right edge. The bubble itself uses a
    muted neutral fill a shade lighter than the page background, with the
-   normal light text colour, rather than a loud accent fill. */
+   normal light text colour, rather than a loud accent fill. Text inside
+   the bubble is centered while the bubble itself still hugs the right
+   edge of the row -- i.e. the bubble ("object") sits to the right, and
+   the text inside it is centered rather than left-aligned. */
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
     flex: none !important;
     background: var(--ff-surface-2) !important;
@@ -197,7 +200,7 @@ div[data-testid="stButton"] button[kind="primary"] * { color: #171717 !important
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] * {
     color: var(--ff-text) !important;
-    text-align: left;
+    text-align: center;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] p {
     margin: 0;
