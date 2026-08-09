@@ -386,9 +386,25 @@ def _normalize_category_text(text: str) -> str:
     """Lowercase + collapse whitespace + singularize the standalone word
     'funds' -> 'fund' so a plural user query ('small cap funds') and a
     singular dataset label ('Small Cap Fund') aren't treated as different
-    strings by an exact-substring check purely over the trailing 's'."""
+    strings by an exact-substring check purely over the trailing 's'.
+
+    Also typo-corrects a word that's a near-miss of 'fund'/'funds' (e.g.
+    'fumds', 'fnud') back to 'fund'. Without this, a single-letter typo
+    on that one word was enough to knock the whole query below both the
+    exact-substring boost AND the fuzzy-match threshold in
+    best_sub_category_match() -- so e.g. 'large cap fumds' failed to
+    resolve as a category at all and fell through to the single-fund
+    fallback in detect_intent(), which then confidently (and wrongly)
+    matched a specific fund whose name happened to contain 'Large' and
+    'Cap' and 'Fund', instead of showing the Large Cap Fund category list.
+    """
     t = str(text or "").lower().strip()
     t = re.sub(r"\bfunds\b", "fund", t)
+    words = t.split(" ")
+    for i, w in enumerate(words):
+        if w and w != "fund" and 3 <= len(w) <= 6 and fuzz.ratio(w, "fund") >= 65:
+            words[i] = "fund"
+    t = " ".join(words)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -835,13 +851,13 @@ class FinanceBot:
 
         raise FundNotFoundError(f"No fund matching '{query}' found in the dataset.")
 
-    def match_funds_multi(self, query: str, n: int = 5) -> pd.DataFrame:
+    def match_funds_multi(self, query: str, n: int = 5, score_cutoff: float = 0.4) -> pd.DataFrame:
         """Return several close candidates (used when an exact pick is ambiguous)."""
         q = query.strip().lower()
         contains = self.df[self.df["Scheme Name"].str.lower().str.contains(re.escape(q), na=False)]
         if len(contains):
             return contains.head(n)
-        matches = ranked_fuzzy_matches(query, self._scheme_names, limit=n, score_cutoff=0.4)
+        matches = ranked_fuzzy_matches(query, self._scheme_names, limit=n, score_cutoff=score_cutoff)
         names = [name for name, _score in matches]
         return self.df[self.df["Scheme Name"].isin(names)]
 
@@ -1314,13 +1330,28 @@ class FinanceBot:
             best_sc, score = self.best_sub_category_match(q_wo_amc)
             if best_sc and score >= SUBCAT_MATCH_THRESHOLD:
                 return "top_funds", {"category_text": q_wo_amc, "n": 10, "amc": amc}
+        else:
+            best_sc, score = None, 0.0
 
         if not generic_question:
             # Fund-name lookups use the ORIGINAL text (AMC is typically
-            # part of the scheme name, e.g. "HDFC Flexi Cap Fund").
-            candidate = self.match_funds_multi(q, n=1)
-            if not candidate.empty:
-                return "fund_info", {"fund_text": q}
+            # part of the scheme name, e.g. "HDFC Flexi Cap Fund"). Uses
+            # the same 0.55 bar as match_funds_ranked() (the real matcher
+            # respond() calls next for a "fund_info" intent) -- the old
+            # looser 0.4 cutoff here let a query that was really a
+            # near-miss category (e.g. "large cap fumds", just below
+            # SUBCAT_MATCH_THRESHOLD) get misrouted to fund_info purely
+            # because *some* fund's name shared a couple of words, then
+            # confidently shown as if it were the answer. Also skip this
+            # fallback entirely when the rejected category match was
+            # already a decent partial hit -- that's a stronger signal
+            # the user meant a category than "a fund technically scored
+            # above cutoff too", and a wrong specific-fund guess is worse
+            # than falling through to a guided prompt.
+            if score < 0.45:
+                candidate = self.match_funds_multi(q, n=1, score_cutoff=0.55)
+                if not candidate.empty:
+                    return "fund_info", {"fund_text": q}
 
         return "unknown", {"raw": q}
 
