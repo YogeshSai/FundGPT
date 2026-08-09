@@ -1029,12 +1029,16 @@ class FinanceBot:
             out.append("_Tax-saver (ELSS) fund_")
         out.append("")
 
-        # One consolidated performance table instead of a separate table
-        # per horizon -- same numbers, far less scrolling. "Return" uses
-        # CAGR (annualised) where available so horizons are comparable
-        # like-for-like, falling back to absolute return for the shorter
-        # horizons that don't have a CAGR figure.
-        rows = []
+        # A 5-column markdown table (Horizon | Return | Volatility | Max
+        # Drawdown | Sharpe) forces horizontal scrolling on a phone-width
+        # chat pane -- tables render as fixed-width columns that don't
+        # reflow. A stacked line per horizon wraps naturally at any width
+        # and reads more like a sentence than a spreadsheet, so that's
+        # used here instead. Missing metrics (e.g. Sharpe on a <1Y
+        # horizon) are dropped from that horizon's line entirely rather
+        # than shown as a "—" placeholder -- one less thing to parse on a
+        # small screen.
+        lines = []
         for horizon in self._PROFILE_HORIZONS:
             cagr_col, abs_col = f"{horizon}_CAGR", f"{horizon}_AbsoluteReturn"
             ret = row.get(cagr_col)
@@ -1046,16 +1050,22 @@ class FinanceBot:
             sharpe = row.get(f"{horizon}_Sharpe")
             if pd.isna(ret) and pd.isna(vol) and pd.isna(mdd) and pd.isna(sharpe):
                 continue
-            rows.append((horizon, fmt(ret, is_percent=True), fmt(vol, is_percent=True),
-                         fmt(mdd, is_percent=True), fmt(sharpe)))
 
-        if rows:
+            bits = []
+            if not pd.isna(ret):
+                bits.append(f"Return {fmt(ret, is_percent=True)}" + (" p.a." if ret_is_cagr else ""))
+            if not pd.isna(vol):
+                bits.append(f"Volatility {fmt(vol, is_percent=True)}")
+            if not pd.isna(mdd):
+                bits.append(f"Max DD {fmt(mdd, is_percent=True)}")
+            if not pd.isna(sharpe):
+                bits.append(f"Sharpe {fmt(sharpe)}")
+            lines.append(f"- **{horizon}** — " + " · ".join(bits))
+
+        if lines:
             out.append("**Performance Snapshot**")
-            out.append("| Horizon | Return* | Volatility | Max Drawdown | Sharpe |")
-            out.append("|---|---|---|---|---|")
-            for horizon, ret, vol, mdd, sharpe in rows:
-                out.append(f"| {horizon} | {ret} | {vol} | {mdd} | {sharpe} |")
-            out.append("_*Annualised (CAGR) for 1Y+, absolute return for shorter periods._")
+            out.extend(lines)
+            out.append("_Return is annualised (p.a.) for 1Y+, absolute for shorter periods._")
             out.append("")
 
         composite = row.get("Composite_Score")
