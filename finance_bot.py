@@ -960,12 +960,16 @@ class FinanceBot:
     # ------------------------------------------------------------------
     # Formatting: full fund profile -> markdown
     # ------------------------------------------------------------------
+    # Horizons shown on the profile page. Deliberately fewer than the full
+    # HORIZONS list (drops 1D/1W as too noisy for an investment read, and
+    # SI as usually redundant with 10Y) -- keeps the snapshot to the
+    # horizons that actually matter for a "should I invest" read.
+    _PROFILE_HORIZONS = ["1M", "6M", "1Y", "3Y", "5Y", "10Y"]
+
     def format_fund_profile(self, row: pd.Series, fund_summarizer=None) -> str:
-        def fmt(v, is_subcat_field=False, is_percent=False):
+        def fmt(v, is_percent=False):
             if pd.isna(v):
                 return "—"
-            if is_subcat_field:
-                return clean_subcat_label(str(v))
             if isinstance(v, float):
                 if is_percent:
                     return f"{v * 100:.2f}%"
@@ -974,41 +978,64 @@ class FinanceBot:
 
         out = [f"## {row['Scheme Name']}\n"]
 
-        out.append("**Basic Information**")
-        out.append("| Field | Value |")
-        out.append("|---|---|")
-        for c in BASIC_COLS:
-            if c in row.index and c != "Scheme Name":
-                out.append(f"| {c} | {fmt(row[c], is_subcat_field=(c == 'Sub Category'))} |")
+        # Compact one-line header instead of a 6-row Basic Information
+        # table -- AMC / category / NAV is what a reader actually scans
+        # for; Scheme Code and Asset Class are dropped as noise, and ELSS
+        # only shown when it's actually relevant (True).
+        amc = row.get("AMC (Fund House)")
+        subcat = clean_subcat_label(str(row["Sub Category"])) if "Sub Category" in row.index and not pd.isna(row["Sub Category"]) else None
+        header_bits = [b for b in [amc, subcat] if b and not pd.isna(b)]
+        if header_bits:
+            out.append(" · ".join(str(b) for b in header_bits))
+        nav = row.get("Latest NAV")
+        nav_date = row.get("Latest NAV Date")
+        if not pd.isna(nav):
+            nav_line = f"**NAV:** ₹{fmt(nav)}"
+            if not pd.isna(nav_date):
+                nav_line += f" (as of {pd.to_datetime(nav_date).strftime('%d %b %Y')})"
+            out.append(nav_line)
+        if row.get("ELSS") is True:
+            out.append("_Tax-saver (ELSS) fund_")
         out.append("")
 
-        for horizon in HORIZONS:
-            present = [f"{horizon}_{s}" for s in METRIC_SUFFIXES if f"{horizon}_{s}" in row.index]
-            if not present:
+        # One consolidated performance table instead of a separate table
+        # per horizon -- same numbers, far less scrolling. "Return" uses
+        # CAGR (annualised) where available so horizons are comparable
+        # like-for-like, falling back to absolute return for the shorter
+        # horizons that don't have a CAGR figure.
+        rows = []
+        for horizon in self._PROFILE_HORIZONS:
+            cagr_col, abs_col = f"{horizon}_CAGR", f"{horizon}_AbsoluteReturn"
+            ret = row.get(cagr_col)
+            ret_is_cagr = not pd.isna(ret) if cagr_col in row.index else False
+            if not ret_is_cagr:
+                ret = row.get(abs_col)
+            vol = row.get(f"{horizon}_Volatility")
+            mdd = row.get(f"{horizon}_MaxDrawdown")
+            sharpe = row.get(f"{horizon}_Sharpe")
+            if pd.isna(ret) and pd.isna(vol) and pd.isna(mdd) and pd.isna(sharpe):
                 continue
-            out.append(f"**{horizon} Performance & Risk**")
-            out.append("| Metric | Value |")
-            out.append("|---|---|")
-            for c in present:
-                suffix = c.split("_", 1)[1]
-                label = FRIENDLY_LABELS.get(suffix, suffix)
-                # These are all stored as fractions (0.16 == 16%) except
-                # Sharpe / Sortino / Calmar, which are dimensionless
-                # risk-adjusted-return ratios and are conventionally
-                # shown as plain numbers (e.g. "1.24"), not percentages.
-                is_pct = suffix in (
-                    "AbsoluteReturn", "CAGR", "Volatility", "MaxDrawdown",
-                    "DownsideDev", "VaR95", "RollMean", "RollMin", "RollMax",
-                )
-                out.append(f"| {label} | {fmt(row[c], is_percent=is_pct)} |")
+            rows.append((horizon, fmt(ret, is_percent=True), fmt(vol, is_percent=True),
+                         fmt(mdd, is_percent=True), fmt(sharpe)))
+
+        if rows:
+            out.append("**Performance Snapshot**")
+            out.append("| Horizon | Return* | Volatility | Max Drawdown | Sharpe |")
+            out.append("|---|---|---|---|---|")
+            for horizon, ret, vol, mdd, sharpe in rows:
+                out.append(f"| {horizon} | {ret} | {vol} | {mdd} | {sharpe} |")
+            out.append("_*Annualised (CAGR) for 1Y+, absolute return for shorter periods._")
             out.append("")
 
-        out.append("**Overall**")
-        out.append("| Metric | Value |")
-        out.append("|---|---|")
-        for c in SCORE_COLS:
-            if c in row.index:
-                out.append(f"| {c.replace('_', ' ')} | {fmt(row[c])} |")
+        composite = row.get("Composite_Score")
+        peer_rank = row.get("Peer_Rank")
+        if not pd.isna(composite) or not pd.isna(peer_rank):
+            bits = []
+            if not pd.isna(composite):
+                bits.append(f"**Composite Score:** {fmt(composite)}")
+            if not pd.isna(peer_rank):
+                bits.append(f"**Peer Rank:** #{int(peer_rank)}")
+            out.append(" · ".join(bits))
 
         summary_text = fund_summarizer(_fund_metrics_text(row)) if fund_summarizer else None
         if summary_text:
