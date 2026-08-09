@@ -152,7 +152,7 @@ SUBCAT_MATCH_THRESHOLD = 0.35
 # The dataset can tag the SAME SEBI category under different raw
 # "Sub Category" strings. Left unmerged, this shows up as duplicate
 # entries in the browse list and splits a single category's funds
-# across two separate top_funds() results. This runs once at load time
+# across two separate _funds() results. This runs once at load time
 # (see FinanceBot.load_data), before _sub_categories / the Asset Type
 # map are built, so every downstream consumer sees one merged value.
 #
@@ -663,7 +663,7 @@ class FinanceBot:
 
         metric_cols = self._resolve_top_n_metric_cols(subset)
         headers = ["Scheme Name"] + [label for _, label in metric_cols]
-        lines = [f"### Top {n} funds in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
+        lines = [f"### Top performing funds in **{clean_subcat_label(sub_category)}** ({len(subset)} funds)\n"]
         header = "| # | " + " | ".join(headers) + " |"
         sep = "|---|" + "|".join(["---"] * len(headers)) + "|"
         lines += [header, sep]
