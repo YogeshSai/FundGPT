@@ -488,16 +488,17 @@ elif len(st.session_state.messages) <= 1:
                 queue_action(q)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Free-form input, always available at the bottom. ---
+# --- Free-form input, always available at the bottom. Routed through the
+#     same queue_action() + rerun() pattern as every other entry point
+#     (sidebar, toolbar, chips, guided-flow buttons) -- NOT rendered
+#     inline here. Rendering inline would show the assistant's text
+#     answer immediately, but any guided-flow buttons the answer implies
+#     (e.g. "a few funds match X, which one?") are drawn by the payload
+#     block ABOVE this one in the script, which would already have run
+#     with the OLD pending state and so would show no buttons at all
+#     until some unrelated rerun happened to catch up. ---
 if prompt := st.chat_input("Ask about a fund or a category..."):
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    with st.chat_message("assistant"):
-        with st.spinner("Looking that up..."):
-            answer = bot.respond(prompt, llm_fallback=llm_fallback)
-        st.markdown(answer, unsafe_allow_html=True)
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+    queue_action(prompt)
 
 with st.expander("Example queries"):
     st.markdown(
