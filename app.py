@@ -14,7 +14,7 @@ Run:
 
 import streamlit as st
 
-from finance_bot import FinanceBot, clean_subcat_label
+from finance_bot import FinanceBot, subcat_browse_label
 from llm_fallback import get_llm_fallback
 
 st.set_page_config(page_title="FundGPT — Mutual Fund Bot", page_icon="📈", layout="wide")
@@ -341,12 +341,15 @@ with st.sidebar:
                 st.session_state.selected_asset_type = None
                 st.rerun()
 
-        # Labels shown here are the cleaned-up display text (no "Close/Open
-        # Ended Schemes" wrapper, no parentheses); the raw dataset value is
-        # still what gets sent to the bot when clicked, so matching stays exact.
+        # Labels shown here have both the "Close/Open Ended Schemes"
+        # wrapper AND the redundant Asset-Type scheme prefix (e.g.
+        # "Equity Scheme - ") stripped, since the Asset Type is already
+        # implied by this list (see subcat_browse_label). The raw
+        # dataset value is still what gets sent to the bot when clicked,
+        # so matching stays exact.
         subcats = bot.asset_type_to_subcats.get(atype, [])
         for sc in subcats:
-            if st.button(clean_subcat_label(sc), key=f"subcat_{sc}", use_container_width=True):
+            if st.button(subcat_browse_label(sc), key=f"subcat_{sc}", use_container_width=True):
                 st.session_state.selected_subcat = sc
                 st.rerun()
 
